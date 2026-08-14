@@ -107,13 +107,12 @@ button { cursor: pointer; }
 
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
 
-/* One leaf, cut flat, in the darkest green. */
+/* The same gradient, shrunk to a mark. */
 .brand-mark {
-  width: 11px; height: 19px;
+  width: 13px; height: 13px;
   flex: none;
-  border-radius: 60% 0 60% 0;
-  background: var(--canopy);
-  transform: rotate(-14deg);
+  border-radius: 50%;
+  background: linear-gradient(150deg, var(--frond), var(--canopy) 62%, var(--fruit));
 }
 
 .trip-name {
@@ -492,23 +491,16 @@ main {
   margin-bottom: 12px;
 }
 
-/* Flat stacked foliage, hard edges, no blending. Drawn on a 400×56 tile and
-   always shown at that ratio, so the leaves never stretch. */
-.canopy { display: block; width: 100%; height: auto; }
-.empty .canopy { max-width: 300px; margin: 0 auto 24px; }
-
-/* Undergrowth along the bottom of the Next screen. Behind everything, catches
-   no taps, never has content over it. Held to the content column so it stays
-   in proportion on a wide screen. */
-.ground {
-  position: fixed;
-  left: 0; right: 0;
-  bottom: calc(var(--tab-h) + env(safe-area-inset-bottom));
-  z-index: 0;
-  max-width: 560px;
-  margin: 0 auto;
-  pointer-events: none;
-  opacity: 0.45;
+/* The empty screens get depth from a gradient rather than drawn foliage: the
+   same stack of greens, warmed by the fruit, with nothing to read as an object. */
+.bloom {
+  width: 116px;
+  height: 116px;
+  margin: 0 auto 26px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 28% 22%, color-mix(in srgb, var(--fruit) 30%, transparent), transparent 62%),
+    linear-gradient(152deg, var(--pale), var(--frond) 52%, var(--canopy));
 }
 
 .empty { padding: 48px 0 60px; text-align: center; }

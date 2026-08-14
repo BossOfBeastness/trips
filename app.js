@@ -6,7 +6,7 @@ import {
   relative, dayDiff,
 } from './model.js';
 import { buildIcs } from './ics.js';
-import { icon, canopy, ICON_FOR_MODE, ICON_FOR_TYPE } from './icons.js';
+import { icon, ICON_FOR_MODE, ICON_FOR_TYPE } from './icons.js';
 
 const state = {
   trips: [],
@@ -85,7 +85,7 @@ function render() {
   if (!t) {
     view.innerHTML = `
       <div class="empty">
-        ${canopy({ fruit: true })}
+        <div class="bloom"></div>
         <h2>No trips yet</h2>
         <p>Start one, then add flights and bookings as you plan them.</p>
         <button class="btn primary" data-new-trip>Start a trip</button>
@@ -115,7 +115,7 @@ function viewNow() {
   if (!next) {
     html += `
       <div class="empty">
-        ${canopy({ fruit: true })}
+        <div class="bloom"></div>
         <h2>Nothing ahead</h2>
         <p>Everything on this trip has been and gone.</p>
       </div>`;
@@ -153,9 +153,8 @@ function viewNow() {
     html += `<a class="note" href="#/cash">${icon('wallet', { size: 18 })}<span>${line}</span></a>`;
   }
 
-  // No foliage here on purpose. This screen has one job — the leave-by time —
-  // and decoration next to it only competes. The palette carries the jungle;
-  // the illustration lives on the empty screens, where there is nothing to crowd.
+  // Nothing decorative here on purpose. This screen has one job — the leave-by
+  // time — and anything next to it only competes. The palette carries the mood.
   view.innerHTML = html;
   wire();
 }
@@ -208,8 +207,8 @@ function viewPlan() {
 
   if (!shown.length) {
     html += q
-      ? `<div class="empty">${canopy({ fruit: true })}<h2>No matches</h2><p>Nothing here mentions “${esc(state.query)}”.</p></div>`
-      : `<div class="empty">${canopy({ fruit: true })}<h2>Nothing planned</h2>
+      ? `<div class="empty"><div class="bloom"></div><h2>No matches</h2><p>Nothing here mentions “${esc(state.query)}”.</p></div>`
+      : `<div class="empty"><div class="bloom"></div><h2>Nothing planned</h2>
          <p>Add the first flight or booking with the plus button.</p></div>`;
   } else {
     html += `<div class="trail">`;
@@ -271,7 +270,7 @@ function viewCash() {
   if (!plan.length && !settled.length) {
     view.innerHTML = `
       <div class="empty">
-        ${canopy({ fruit: true })}
+        <div class="bloom"></div>
         <h2>Nothing owed</h2>
         <p>Mark a booking “pay at the place” and what you owe collects here.</p>
       </div>`;

@@ -37,44 +37,6 @@ export function icon(name, { size = 20, cls = '' } = {}) {
     aria-hidden="true" focusable="false">${d}</svg>`;
 }
 
-/* Rousseau, "Exotic Landscape" (1910): foliage built from flat, hard-edged leaf
-   shapes in many separate greens, stacked in bands with no blending or shading,
-   and the whole canvas turning on a few orange fruit. Drawn the same way here —
-   fixed layout, no randomness, so it never shimmers between renders. */
-
-const LEAF = 'M0 0C7 -12 8 -27 0 -40C-8 -27 -7 -12 0 0Z';
-
-/* The tile is 400×56 and is always drawn at that ratio, so the leaves keep their
-   shape. Palest and smallest behind, darkest and largest in front — Rousseau's
-   depth comes from stacking flat bands, never from shading. */
-const VW = 400, VH = 56;
-
-// [x, scale, rotation] per band. Placed by eye, fixed, never randomised.
-const BANDS = [
-  { fill: 'var(--pale)',   y: 50, leaves: [[6, .78, -26], [40, .62, -8], [72, .72, 14], [108, .58, -18], [146, .75, 6], [182, .64, 22], [214, .82, -12], [250, .6, 10], [284, .72, -22], [318, .65, 16], [352, .75, -6], [386, .62, 20]] },
-  { fill: 'var(--frond)',  y: 53, leaves: [[22, .95, -14], [58, .78, 18], [96, .98, -4], [130, .8, -24], [166, .92, 10], [200, .74, -16], [236, .95, 20], [270, .78, -8], [304, .9, 14], [340, .74, -20], [372, .92, 4]] },
-  { fill: 'var(--canopy)', y: 56, leaves: [[0, 1.12, -10], [46, .95, 16], [84, 1.08, -20], [122, .92, 8], [158, 1.12, -6], [194, .98, 22], [228, 1.05, -16], [262, .95, 12], [298, 1.12, -2], [334, .98, 18], [368, 1.08, -14], [398, .92, 6]] },
-];
-
-const FRUIT = [[64, 30], [188, 22], [296, 33]];
-
-// `fruit` places the oranges. They are the point of the reference, so they show
-// on the emptiest screen and nowhere else.
-export function canopy({ fruit = false } = {}) {
-  const bands = BANDS.map(b =>
-    `<g fill="${b.fill}">` + b.leaves.map(([x, s, r]) =>
-      `<path d="${LEAF}" transform="translate(${x} ${b.y}) rotate(${r}) scale(${s})"/>`
-    ).join('') + `</g>`
-  ).join('');
-
-  const fruits = fruit
-    ? FRUIT.map(([cx, cy]) => `<circle cx="${cx}" cy="${cy}" r="4.5" fill="var(--fruit)"/>`).join('')
-    : '';
-
-  return `<svg class="canopy" viewBox="0 0 ${VW} ${VH}" preserveAspectRatio="xMidYMax meet"
-    aria-hidden="true" focusable="false">${bands}${fruits}</svg>`;
-}
-
 export const ICON_FOR_MODE = {
   flight: 'plane', train: 'train', bus: 'bus', ferry: 'ferry', car: 'car', transfer: 'transfer',
 };
