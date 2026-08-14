@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trips</title>
+<meta name="description" content="Offline itinerary for two people.">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Trips">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header id="topbar">
+  <button id="tripBtn" class="trip-picker" type="button">
+    <span id="tripName">No trip yet</span>
+    <span class="chev">▾</span>
+  </button>
+  <button id="addBtn" class="icon-btn" type="button" title="Add item">＋</button>
+</header>
+
+<main id="view"></main>
+
+<nav id="tabs">
+  <a href="#/now"      data-tab="now">      <span class="ti">⏱</span><span>Now</span></a>
+  <a href="#/plan"     data-tab="plan">     <span class="ti">🗓</span><span>Plan</span></a>
+  <a href="#/cash"     data-tab="cash">     <span class="ti">💷</span><span>Cash</span></a>
+  <a href="#/bookings" data-tab="bookings"> <span class="ti">🎟</span><span>Refs</span></a>
+  <a href="#/more"     data-tab="more">     <span class="ti">⚙</span><span>More</span></a>
+</nav>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-backdrop" data-close></div>
+  <div class="sheet-panel" role="dialog" aria-modal="true">
+    <div class="sheet-head">
+      <button type="button" class="link" data-close>Cancel</button>
+      <strong id="sheetTitle">Item</strong>
+      <button type="button" class="link strong" id="sheetSave">Save</button>
+    </div>
+    <div class="sheet-body" id="sheetBody"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
