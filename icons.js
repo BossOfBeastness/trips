@@ -44,3 +44,9 @@ export const ICON_FOR_MODE = {
 export const ICON_FOR_TYPE = {
   transport: 'plane', stay: 'stay', activity: 'activity', food: 'food', other: 'pin',
 };
+
+// One icon per kind, so a glance down the timeline tells you what each stop is.
+export const ICON_FOR_KIND = {
+  flight: 'plane', train: 'train', bus: 'bus', ferry: 'ferry', car: 'car',
+  transfer: 'transfer', stay: 'stay', activity: 'activity', food: 'food', other: 'pin',
+};

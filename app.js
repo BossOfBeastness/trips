@@ -1,12 +1,12 @@
 import { db, uid } from './db.js';
 import {
-  TRANSPORT_MODES, ITEM_TYPES, PAY_STATUS, PAY_METHOD,
-  blankItem, leadFor, parseLocal, leaveByDate, groupByDay, sortItems,
-  nextUp, cashPlan, fmtMoney, fmtTime, fmtDayLong, fmtDayShort,
-  relative, dayDiff,
+  TRANSPORT_MODES, ITEM_TYPES, PAY_STATUS, PAY_METHOD, KINDS,
+  kindOf, applyKind, blankItem, leadFor, parseLocal, leaveByDate, groupByDay, sortItems,
+  nextUp, cashPlan, fmtMoney, fmtTime, fmtDayLong, fmtDayShort, fmtDayNum, fmtWeekday,
+  relative, dayDiff, hasTime, datePart, timePart, joinWhen,
 } from './model.js';
 import { buildIcs } from './ics.js';
-import { icon, ICON_FOR_MODE, ICON_FOR_TYPE } from './icons.js';
+import { icon, ICON_FOR_KIND } from './icons.js';
 
 const state = {
   trips: [],
@@ -33,11 +33,7 @@ function toast(msg) {
   toast._t = setTimeout(() => { t.hidden = true; }, 2400);
 }
 
-function iconFor(it) {
-  return it.type === 'transport'
-    ? (ICON_FOR_MODE[it.mode] || 'plane')
-    : (ICON_FOR_TYPE[it.type] || 'pin');
-}
+const iconFor = it => ICON_FOR_KIND[kindOf(it)] || 'pin';
 
 /* ---------------------------------------------------------------- data --- */
 
@@ -161,26 +157,52 @@ function viewNow() {
 
 function focusCard(it, now) {
   const start = parseLocal(it.start);
-  const leave = leaveByDate(it);
+  const leave = hasTime(it.start) ? leaveByDate(it) : null;
   const overdue = leave && leave < now;
-  const shown = leave || start;
+  const days = start ? dayDiff(start, now) : 0;
+
+  // A leave-by clock is only useful once it is nearly time. Three months out the
+  // number you need is the date, so that is what the card leads with.
+  const imminent = start && days <= 1;
+
+  let label, big, sub;
+  if (imminent && leave) {
+    label = overdue ? 'Should have left' : 'Leave by';
+    big = fmtTime(leave);
+    sub = `${relative(leave, now)} · ${leadFor(it)} min before ${fmtTime(start)}`;
+  } else if (imminent) {
+    label = 'Starts';
+    big = fmtTime(start);
+    sub = relative(start, now);
+  } else {
+    label = days === 1 ? 'Tomorrow' : 'Departs';
+    big = fmtDayNum(start);
+    sub = `${fmtWeekday(start)}${hasTime(it.start) ? ` · ${fmtTime(start)}` : ''} · ${days} days away`;
+  }
 
   const route = it.from || it.to
     ? `<p class="focus-route">${esc(it.from || '')}${it.from && it.to ? '<span class="sep">to</span>' : ''}<span class="to">${esc(it.to || '')}</span></p>`
+    : '';
+
+  const end = parseLocal(it.end);
+  const arrive = end && hasTime(it.end)
+    ? `<p class="focus-arrive">Arrives ${esc(fmtTime(end))}${dayDiff(end, start) ? ` on ${esc(fmtDayNum(end))}` : ''}</p>`
     : '';
 
   return `
     <button class="focus ${overdue ? 'overdue' : ''}" data-open="${esc(it.id)}">
       <div class="focus-head">
         ${icon(iconFor(it), { size: 18 })}
-        <span class="focus-when">${esc(fmtDayShort(start))} · ${esc(fmtTime(start))}</span>
+        <span class="focus-when">${esc(KINDS[kindOf(it)]?.label || 'Item')}</span>
       </div>
-      <h1 class="focus-title">${esc(it.title || (ITEM_TYPES[it.type] || {}).label || 'Untitled')}</h1>
+      <h1 class="focus-title">${esc(it.title || 'Untitled')}</h1>
       ${route}
+      ${arrive}
+      ${it.docs ? `<p class="focus-docs">${icon('inbox', { size: 15 })}<span>${esc(it.docs)}</span></p>` : ''}
       <div class="depart">
-        <span class="depart-label">${leave ? (overdue ? 'Should have left' : 'Leave by') : 'Starts'}</span>
-        <time class="depart-time">${esc(fmtTime(shown))}</time>
-        <span class="depart-rel">${esc(relative(shown, now))}${leave ? ` · ${leadFor(it)} min before` : ''}</span>
+        <span class="depart-label">${esc(label)}</span>
+        <time class="depart-time">${esc(big)}</time>
+        <span class="depart-rel">${esc(sub)}</span>
       </div>
     </button>`;
 }
@@ -212,8 +234,22 @@ function viewPlan() {
          <p>Add the first flight or booking with the plus button.</p></div>`;
   } else {
     html += `<div class="trail">`;
+    let prevDay = null;
     for (const [key, items] of groupByDay(shown)) {
       const d = key === 'unscheduled' ? null : parseLocal(key);
+
+      // One dash per empty day, so a week sat in one place looks like a week
+      // rather than two entries touching.
+      if (d && prevDay) {
+        const gap = dayDiff(d, prevDay) - 1;
+        if (gap > 0) {
+          html += `<div class="gap" aria-label="${gap} day${gap === 1 ? '' : 's'} with nothing planned">`
+            + '<span class="dash"></span>'.repeat(Math.min(gap, 14))
+            + `<span class="gap-note">${gap} day${gap === 1 ? '' : 's'}</span></div>`;
+        }
+      }
+      if (d) prevDay = d;
+
       const today = d && dayDiff(d, now) === 0;
       html += `<h2 class="day-label ${today ? 'today' : ''}">${d ? esc(fmtDayLong(d)) : 'No date yet'}</h2>`;
       html += items.map(it => stopRow(it, now, q)).join('');
@@ -240,24 +276,37 @@ function stopRow(it, now, q) {
   const done = start && start < now;
   const isNext = nextUp(state.items, now)?.id === it.id;
 
-  // One sub-line at most. While searching, show the reference instead of the
-  // route, because that is what you were looking for.
+  const end = parseLocal(it.end);
+  // Arrival matters as much as departure when you are the one travelling.
+  const arrive = end && hasTime(it.end) ? `arr ${fmtTime(end)}` : '';
+
   let sub = '';
   if (q && it.ref) sub = `<span class="stop-sub ref selectable">${esc(it.ref)}</span>`;
-  else if (it.from || it.to) sub = `<span class="stop-sub">${esc([it.from, it.to].filter(Boolean).join(' to '))}</span>`;
-  else if (it.provider) sub = `<span class="stop-sub">${esc(it.provider)}</span>`;
+  else {
+    const bits = [
+      (it.from || it.to) ? [it.from, it.to].filter(Boolean).join(' to ') : it.provider,
+      arrive,
+    ].filter(Boolean);
+    if (bits.length) sub = `<span class="stop-sub">${esc(bits.join(' · '))}</span>`;
+  }
 
   const owes = !it.settledAt && PAY_STATUS[it.payStatus]?.needsMoney
     && (it.payMethod === 'cash' || it.payMethod === 'either');
 
+  // Cost sits in the margin like a note pencilled beside the entry.
+  const cost = it.amount
+    ? `<span class="cost ${owes ? 'owed' : ''}">${esc(fmtMoney(it.amount, it.currency))}</span>`
+    : (owes ? `<span class="cost owed">cash</span>` : '');
+
   return `
     <button class="stop ${done ? 'done' : ''} ${isNext ? 'now' : ''}" data-open="${esc(it.id)}">
-      <span class="stop-time">${start ? esc(fmtTime(start)) : '—'}</span>
+      <span class="node">${icon(iconFor(it), { size: 15 })}</span>
+      <span class="stop-time">${start ? esc(hasTime(it.start) ? fmtTime(start) : 'all day') : '—'}</span>
       <span class="stop-body">
         <span class="stop-title">${esc(it.title || 'Untitled')}</span>
         ${sub}
       </span>
-      ${owes ? `<span class="stop-mark cash">${icon('wallet', { size: 16 })}</span>` : ''}
+      ${cost}
     </button>`;
 }
 
@@ -423,70 +472,80 @@ function editItem(existing) {
   const isNew = !existing;
   const pendingFiles = [];
 
+  // Separate date and time boxes rather than one datetime-local. The native
+  // combined picker is miserable on a phone, and a date can be known months
+  // before the time is, which the combined control refuses to accept.
   openSheet(isNew ? 'Add to trip' : 'Edit', `
-    ${select('Kind', 'type', it.type, ITEM_TYPES)}
-    ${field('What is it', 'title', it.title, { placeholder: 'Fly to Cusco' })}
+    ${select('What kind', 'kind', kindOf(it), KINDS)}
+    ${field('Name it', 'title', it.title, { placeholder: 'Flight to Cusco' })}
 
-    <div data-only="transport">
-      ${select('How', 'mode', it.mode, TRANSPORT_MODES)}
-      ${field('From', 'from', it.from, { placeholder: 'London' })}
-      ${field('To', 'to', it.to, { placeholder: 'Cusco' })}
-      ${field('Seat or vehicle', 'seat', it.seat, { placeholder: '14A' })}
-    </div>
-
-    ${field('Starts', 'start', it.start, { type: 'datetime-local' })}
-    ${field('Ends', 'end', it.end, { type: 'datetime-local' })}
-    ${field('Leave this many minutes early', 'leadMinutes', it.leadMinutes ?? '', {
-      type: 'number', placeholder: `${TRANSPORT_MODES[it.mode]?.lead ?? 0} by default`, attrs: 'min="0" step="5"' })}
-
-    <p class="sheet-section">Booking</p>
-    ${field('Booked with', 'provider', it.provider, { placeholder: 'LATAM' })}
-    ${field('Reference', 'ref', it.ref, { placeholder: 'XK9P2T' })}
-
-    <p class="sheet-section">Money</p>
-    ${select('Payment', 'payStatus', it.payStatus, PAY_STATUS)}
-    ${select('Method', 'payMethod', it.payMethod, PAY_METHOD)}
     <div class="field-pair">
-      ${field('Amount', 'amount', it.amount, { type: 'number', attrs: 'step="0.01" min="0"' })}
-      ${field('Currency', 'currency', it.currency, { placeholder: 'PEN', attrs: 'maxlength="3" autocapitalize="characters"' })}
+      <div data-only="transport" style="flex:1">
+        ${field('From', 'from', it.from, { placeholder: 'Gatwick' })}
+      </div>
+      ${field('To', 'to', it.to, { placeholder: 'Cusco' })}
     </div>
 
-    <p class="sheet-section">Notes</p>
-    <label class="field"><span>Anything worth remembering</span>
-      <textarea name="notes" rows="4" placeholder="Key safe code, meeting point, who to ask for">${esc(it.notes)}</textarea>
-    </label>
+    <p class="sheet-section">When</p>
+    <div class="field-pair">
+      ${field('Date', 'startDate', datePart(it.start), { type: 'date' })}
+      ${field('Time', 'startTime', timePart(it.start), { type: 'time' })}
+    </div>
+    <div class="field-pair">
+      ${field('Arrives / ends', 'endDate', datePart(it.end), { type: 'date' })}
+      ${field('Time', 'endTime', timePart(it.end), { type: 'time' })}
+    </div>
 
-    <p class="sheet-section">Attachments</p>
-    <div id="fileList" class="chip-row"></div>
-    <label class="btn">
-      Attach a photo or PDF
-      <input type="file" id="fileInput" accept="image/*,application/pdf" multiple hidden>
-    </label>
-    <p class="hint">Kept on this phone. Opens with no signal.</p>
+    ${field('Bring', 'docs', it.docs, { placeholder: 'Passport, driving licence, PADI card' })}
+
+    <p class="sheet-section">Cost</p>
+    <div class="field-pair">
+      ${field('How much', 'amount', it.amount, { type: 'number', attrs: 'step="0.01" min="0" inputmode="decimal"' })}
+      ${field('Currency', 'currency', it.currency || 'GBP', { attrs: 'maxlength="3" autocapitalize="characters"' })}
+    </div>
+    ${select('Paying', 'payStatus', it.payStatus, PAY_STATUS)}
+    ${select('With', 'payMethod', it.payMethod, PAY_METHOD)}
+
+    <details class="more">
+      <summary>Booking details and notes</summary>
+      ${field('Reference', 'ref', it.ref, { placeholder: 'XK9P2T' })}
+      ${field('Booked with', 'provider', it.provider, { placeholder: 'LATAM' })}
+      ${field('Seat or vehicle', 'seat', it.seat, { placeholder: '14A' })}
+      ${field('Leave this many minutes early', 'leadMinutes', it.leadMinutes ?? '', {
+        type: 'number', placeholder: `${TRANSPORT_MODES[it.mode]?.lead ?? 0} by default`, attrs: 'min="0" step="5"' })}
+      <label class="field"><span>Notes</span>
+        <textarea name="notes" rows="4" placeholder="Key safe code, meeting point, who to ask for">${esc(it.notes)}</textarea>
+      </label>
+      <div id="fileList" class="chip-row"></div>
+      <label class="btn">
+        Attach a photo or PDF
+        <input type="file" id="fileInput" accept="image/*,application/pdf" multiple hidden>
+      </label>
+      <p class="hint">Kept on this phone. Opens with no signal.</p>
+    </details>
 
     ${isNew ? '' : `<button type="button" class="btn quiet" id="delItem">Delete this</button>`}
   `, async () => {
     const f = new FormData(formEl());
-    const next = {
+    const next = applyKind({
       ...it,
       tripId: state.tripId,
-      type: f.get('type'),
       title: (f.get('title') || '').trim(),
-      mode: f.get('mode'),
       from: (f.get('from') || '').trim(),
       to: (f.get('to') || '').trim(),
       seat: (f.get('seat') || '').trim(),
-      start: f.get('start') || '',
-      end: f.get('end') || '',
+      docs: (f.get('docs') || '').trim(),
+      start: joinWhen(f.get('startDate'), f.get('startTime')),
+      end: joinWhen(f.get('endDate'), f.get('endTime')),
       leadMinutes: f.get('leadMinutes') === '' ? null : Number(f.get('leadMinutes')),
       provider: (f.get('provider') || '').trim(),
       ref: (f.get('ref') || '').trim().toUpperCase(),
       payStatus: f.get('payStatus'),
       payMethod: f.get('payMethod'),
       amount: f.get('amount') || '',
-      currency: (f.get('currency') || '').trim().toUpperCase(),
+      currency: (f.get('currency') || '').trim().toUpperCase() || 'GBP',
       notes: (f.get('notes') || '').trim(),
-    };
+    }, f.get('kind'));
     if (!next.title && !next.ref) { toast('Give it a name'); return; }
     if (!next.id) next.id = uid();
     for (const pending of pendingFiles) await db.put('files', { ...pending, itemId: next.id });
@@ -528,14 +587,16 @@ function editItem(existing) {
     refreshFiles();
   });
 
-  const syncType = () => {
-    const type = formEl().querySelector('[name=type]').value;
+  // "From" only means something when you are moving. Hide it otherwise.
+  const kindSel = formEl().querySelector('[name=kind]');
+  const syncKind = () => {
+    const type = KINDS[kindSel.value]?.type;
     $('#sheetBody').querySelectorAll('[data-only]').forEach(el => {
       el.style.display = el.dataset.only === type ? '' : 'none';
     });
   };
-  formEl().querySelector('[name=type]').addEventListener('change', syncType);
-  syncType();
+  kindSel.addEventListener('change', syncKind);
+  syncKind();
 
   $('#delItem')?.addEventListener('click', () => deleteItem(it.id));
 }

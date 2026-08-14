@@ -30,6 +30,32 @@ export const PAY_METHOD = {
   either: { label: 'Cash or card' },
 };
 
+// One list instead of a type picker plus a mode picker. "Is it a flight or a
+// hotel" is a single question to a person, so it should be a single field.
+export const KINDS = {
+  flight:   { label: 'Flight',        type: 'transport', mode: 'flight' },
+  train:    { label: 'Train',         type: 'transport', mode: 'train' },
+  bus:      { label: 'Bus or coach',  type: 'transport', mode: 'bus' },
+  ferry:    { label: 'Ferry',         type: 'transport', mode: 'ferry' },
+  car:      { label: 'Car hire',      type: 'transport', mode: 'car' },
+  transfer: { label: 'Taxi',          type: 'transport', mode: 'transfer' },
+  stay:     { label: 'Stay',          type: 'stay' },
+  activity: { label: 'Activity',      type: 'activity' },
+  food:     { label: 'Food',          type: 'food' },
+  other:    { label: 'Other',         type: 'other' },
+};
+
+export function kindOf(it) {
+  return it.type === 'transport' ? (it.mode || 'flight') : (it.type || 'other');
+}
+
+export function applyKind(item, kind) {
+  const k = KINDS[kind] || KINDS.other;
+  item.type = k.type;
+  if (k.mode) item.mode = k.mode;
+  return item;
+}
+
 export function blankItem(tripId) {
   return {
     id: null,
@@ -45,11 +71,12 @@ export function blankItem(tripId) {
     ref: '',
     provider: '',
     seat: '',
+    docs: '',      // what you must physically have on you: passport, licence, cert card
     notes: '',
     payStatus: 'prepaid',
     payMethod: 'card',
     amount: '',
-    currency: '',
+    currency: 'GBP',
     settledAt: null,
     createdAt: Date.now(),
   };
@@ -159,6 +186,13 @@ export function fmtMoney(amount, currency) {
   }
 }
 
+// Dates and times are stored separately in one string so a date can be pinned
+// months ahead before the time is known — which is how trips actually get planned.
+export const hasTime = s => typeof s === 'string' && s.length > 10;
+export const datePart = s => (s || '').slice(0, 10);
+export const timePart = s => (hasTime(s) ? s.slice(11, 16) : '');
+export const joinWhen = (date, time) => (date ? (time ? `${date}T${time}` : date) : '');
+
 // 24-hour throughout. Shorter, never wraps, and it matches every timetable,
 // boarding pass and ticket you will be reading it against.
 export function fmtTime(d) {
@@ -169,6 +203,17 @@ export function fmtTime(d) {
 export function fmtDayLong(d) {
   if (!d) return 'No date yet';
   return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+// "20 Nov" — what you need when the thing is weeks away.
+export function fmtDayNum(d) {
+  if (!d) return '';
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+export function fmtWeekday(d) {
+  if (!d) return '';
+  return d.toLocaleDateString(undefined, { weekday: 'long' });
 }
 
 export function fmtDayShort(d) {
