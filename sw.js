@@ -1,6 +1,6 @@
 // Cache-first app shell. Once installed, the app opens with no signal at all.
 // Bump CACHE when shipping changes, otherwise phones keep the old copy forever.
-const CACHE = 'trips-v2';
+const CACHE = 'trips-v3';
 
 const SHELL = [
   './',
@@ -10,6 +10,7 @@ const SHELL = [
   './db.js',
   './model.js',
   './ics.js',
+  './icons.js',
   './manifest.webmanifest',
   './icons/icon-180.png',
   './icons/icon-192.png',

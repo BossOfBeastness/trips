@@ -159,14 +159,21 @@ export function fmtMoney(amount, currency) {
   }
 }
 
+// 24-hour throughout. Shorter, never wraps, and it matches every timetable,
+// boarding pass and ticket you will be reading it against.
 export function fmtTime(d) {
   if (!d) return '';
-  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 export function fmtDayLong(d) {
   if (!d) return 'No date yet';
   return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+export function fmtDayShort(d) {
+  if (!d) return 'Undated';
+  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
 // "in 3 days", "in 2h 15m", "12m ago"

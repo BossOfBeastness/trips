@@ -2,13 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Locked: no pinch, no double-tap zoom. Deliberate — this is a glanceable
+     tool used one-handed, and stray zooms on a moving bus are a nuisance. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Trips</title>
 <meta name="description" content="Offline itinerary for two people.">
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#F3F6F0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121A14" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Trips">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" href="icons/icon-192.png">
@@ -17,30 +20,31 @@
 <body>
 
 <header id="topbar">
-  <button id="tripBtn" class="trip-picker" type="button">
-    <span id="tripName">No trip yet</span>
-    <span class="chev">▾</span>
-  </button>
-  <button id="addBtn" class="icon-btn" type="button" title="Add item">＋</button>
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <button id="tripBtn" class="trip-name" type="button"><span id="tripName">Trips</span></button>
+  </div>
+  <div class="top-actions">
+    <button id="addBtn" class="ghost-btn" type="button" aria-label="Add something"></button>
+    <button id="setBtn" class="ghost-btn" type="button" aria-label="Settings"></button>
+  </div>
 </header>
 
 <main id="view"></main>
 
-<nav id="tabs">
-  <a href="#/now"      data-tab="now">      <span class="ti">⏱</span><span>Now</span></a>
-  <a href="#/plan"     data-tab="plan">     <span class="ti">🗓</span><span>Plan</span></a>
-  <a href="#/cash"     data-tab="cash">     <span class="ti">💷</span><span>Cash</span></a>
-  <a href="#/bookings" data-tab="bookings"> <span class="ti">🎟</span><span>Refs</span></a>
-  <a href="#/more"     data-tab="more">     <span class="ti">⚙</span><span>More</span></a>
+<nav id="tabs" aria-label="Sections">
+  <a href="#/now"  data-tab="now"><span class="tab-ic"></span><span class="tab-tx">Next</span></a>
+  <a href="#/plan" data-tab="plan"><span class="tab-ic"></span><span class="tab-tx">Plan</span></a>
+  <a href="#/cash" data-tab="cash"><span class="tab-ic"></span><span class="tab-tx">Cash</span></a>
 </nav>
 
 <div id="sheet" class="sheet" hidden>
-  <div class="sheet-backdrop" data-close></div>
+  <div class="sheet-scrim" data-close></div>
   <div class="sheet-panel" role="dialog" aria-modal="true">
     <div class="sheet-head">
-      <button type="button" class="link" data-close>Cancel</button>
+      <button type="button" class="text-btn" data-close>Cancel</button>
       <strong id="sheetTitle">Item</strong>
-      <button type="button" class="link strong" id="sheetSave">Save</button>
+      <button type="button" class="text-btn accent" id="sheetSave">Save</button>
     </div>
     <div class="sheet-body" id="sheetBody"></div>
   </div>

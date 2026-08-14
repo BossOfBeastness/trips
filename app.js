@@ -2,10 +2,11 @@ import { db, uid } from './db.js';
 import {
   TRANSPORT_MODES, ITEM_TYPES, PAY_STATUS, PAY_METHOD,
   blankItem, leadFor, parseLocal, leaveByDate, groupByDay, sortItems,
-  nextUp, cashPlan, itemsNeedingCash, fmtMoney, fmtTime, fmtDayLong,
+  nextUp, cashPlan, fmtMoney, fmtTime, fmtDayLong, fmtDayShort,
   relative, dayDiff,
 } from './model.js';
 import { buildIcs } from './ics.js';
+import { icon, canopy, ICON_FOR_MODE, ICON_FOR_TYPE } from './icons.js';
 
 const state = {
   trips: [],
@@ -29,7 +30,13 @@ function toast(msg) {
   t.textContent = msg;
   t.hidden = false;
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => { t.hidden = true; }, 2600);
+  toast._t = setTimeout(() => { t.hidden = true; }, 2400);
+}
+
+function iconFor(it) {
+  return it.type === 'transport'
+    ? (ICON_FOR_MODE[it.mode] || 'plane')
+    : (ICON_FOR_TYPE[it.type] || 'pin');
 }
 
 /* ---------------------------------------------------------------- data --- */
@@ -45,24 +52,19 @@ async function load() {
   state.files = await db.all('files');
 }
 
-function trip() {
-  return state.trips.find(t => t.id === state.tripId) || null;
-}
-
-function filesFor(itemId) {
-  return state.files.filter(f => f.itemId === itemId);
-}
+const trip = () => state.trips.find(t => t.id === state.tripId) || null;
+const filesFor = id => state.files.filter(f => f.itemId === id);
 
 async function saveItem(item) {
   if (!item.id) item.id = uid();
-  item.updatedAt = Date.now();   // drives SEQUENCE so a re-imported .ics supersedes the old event
+  item.updatedAt = Date.now();   // drives SEQUENCE so a re-imported .ics supersedes
   await db.put('items', item);
   await load();
   render();
 }
 
 async function deleteItem(id) {
-  if (!confirm('Delete this item? This cannot be undone.')) return;
+  if (!confirm('Delete this? It cannot be undone.')) return;
   for (const f of filesFor(id)) await db.del('files', f.id);
   await db.del('items', id);
   closeSheet();
@@ -75,181 +77,188 @@ async function deleteItem(id) {
 
 function render() {
   const t = trip();
-  $('#tripName').textContent = t ? t.name : 'No trip yet';
-  const route = (location.hash || '#/now').slice(2) || 'now';
-  document.querySelectorAll('#tabs a').forEach(a => {
-    a.classList.toggle('on', a.dataset.tab === route);
-  });
+  $('#tripName').textContent = t ? t.name : 'Trips';
 
-  if (!t && route !== 'more') {
-    view.innerHTML = emptyState();
-    view.querySelector('[data-new-trip]')?.addEventListener('click', () => editTrip(null));
+  const route = (location.hash || '#/now').slice(2) || 'now';
+  document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === route));
+
+  if (!t) {
+    view.innerHTML = `
+      <div class="empty">
+        ${canopy({ fruit: true })}
+        <h2>No trips yet</h2>
+        <p>Start one, then add flights and bookings as you plan them.</p>
+        <button class="btn primary" data-new-trip>Start a trip</button>
+      </div>`;
+    view.querySelector('[data-new-trip]').addEventListener('click', () => editTrip(null));
     return;
   }
 
-  const views = { now: viewNow, plan: viewPlan, cash: viewCash, bookings: viewBookings, more: viewMore };
-  (views[route] || viewNow)();
+  ({ now: viewNow, plan: viewPlan, cash: viewCash }[route] || viewNow)();
 }
 
-function emptyState() {
-  return `
-    <div class="empty">
-      <div class="empty-glyph">🧭</div>
-      <h2>No trips yet</h2>
-      <p>Add a trip, then start dropping in flights, pickups and bookings as you plan them.</p>
-      <button class="btn primary" data-new-trip>Create a trip</button>
-    </div>`;
-}
-
-/* ------------------------------------------------------------- view: now --- */
+/* ------------------------------------------------------------ view: next --- */
 
 function viewNow() {
   const now = new Date();
   const t = trip();
-  const items = state.items;
-  const next = nextUp(items, now);
+  const next = nextUp(state.items, now);
   const tripStart = parseLocal(t.start);
 
   let html = '';
 
   if (tripStart && tripStart > now) {
     const d = dayDiff(tripStart, now);
-    html += `<div class="countdown-strip">${d === 0 ? 'Leaving today' : `${d} day${d === 1 ? '' : 's'} until ${esc(t.name)}`}</div>`;
+    html += `<p class="trip-when">${d === 0 ? 'You leave today' : `${d} day${d === 1 ? '' : 's'} to go`}</p>`;
   }
 
-  if (next) {
-    html += heroCard(next, now);
-  } else {
-    html += `<div class="card muted-card"><p>Nothing scheduled ahead. Everything on this trip is in the past.</p></div>`;
+  if (!next) {
+    html += `
+      <div class="empty">
+        ${canopy({ fruit: true })}
+        <h2>Nothing ahead</h2>
+        <p>Everything on this trip has been and gone.</p>
+      </div>`;
+    view.innerHTML = html;
+    return;
   }
 
-  // The rest of today + tomorrow, so you can glance at the shape of the day.
-  const soon = sortItems(items).filter(it => {
-    if (it === next) return false;
+  html += focusCard(next, now);
+
+  // Exactly one thing after this. Any more and the screen stops answering
+  // "what now?" and starts being a list again.
+  const after = sortItems(state.items).find(it => {
+    if (it.id === next.id) return false;
     const s = parseLocal(it.start);
-    if (!s) return false;
-    const dd = dayDiff(s, now);
-    return s >= now && dd <= 1;
+    return s && s >= now;
   });
+  if (after) {
+    const s = parseLocal(after.start);
+    html += `
+      <button class="after" data-open="${esc(after.id)}">
+        <span class="after-time">${esc(fmtTime(s))}</span>
+        <span class="after-title">${esc(after.title || 'Untitled')}</span>
+      </button>`;
+  }
 
+  const soon = cashPlan(state.items).filter(c => c.firstNeeded && dayDiff(c.firstNeeded, now) <= 2);
   if (soon.length) {
-    html += `<h3 class="section">Then</h3><div class="list">${soon.map(it => itemRow(it, now)).join('')}</div>`;
+    const c = soon[0];
+    const by = esc(fmtDayShort(c.firstNeeded));
+    // A total of zero means the amounts were never filled in, not that nothing
+    // is owed. Say which, rather than printing a confident 0.00.
+    const line = c.certain > 0
+      ? `Have <strong>${esc(fmtMoney(c.certain, c.currency))}</strong> in cash by ${by}`
+      : `<strong>${c.items.length} thing${c.items.length === 1 ? '' : 's'}</strong> to pay in cash by ${by} — no amounts yet`;
+    html += `<a class="note" href="#/cash">${icon('wallet', { size: 18 })}<span>${line}</span></a>`;
   }
 
-  const cash = cashPlan(items).filter(c => c.firstNeeded && dayDiff(c.firstNeeded, now) <= 2);
-  if (cash.length) {
-    html += `<h3 class="section">Cash you need soon</h3>`;
-    html += `<div class="list">` + cash.map(c => `
-      <a class="row cash-row" href="#/cash">
-        <div class="row-main">
-          <div class="row-title">${esc(c.currency)} in hand</div>
-          <div class="row-sub">${c.items.length} place${c.items.length === 1 ? '' : 's'} · first on ${esc(fmtDayLong(c.firstNeeded))}</div>
-        </div>
-        <div class="row-right"><strong>${esc(fmtMoney(c.certain + c.maybe, c.currency))}</strong></div>
-      </a>`).join('') + `</div>`;
-  }
-
+  // No foliage here on purpose. This screen has one job — the leave-by time —
+  // and decoration next to it only competes. The palette carries the jungle;
+  // the illustration lives on the empty screens, where there is nothing to crowd.
   view.innerHTML = html;
-  wireRows();
+  wire();
 }
 
-function heroCard(it, now) {
+function focusCard(it, now) {
   const start = parseLocal(it.start);
   const leave = leaveByDate(it);
-  const meta = ITEM_TYPES[it.type] || ITEM_TYPES.other;
-  const icon = it.type === 'transport' ? (TRANSPORT_MODES[it.mode]?.icon || meta.icon) : meta.icon;
   const overdue = leave && leave < now;
+  const shown = leave || start;
 
-  let leaveBlock = '';
-  if (leave) {
-    leaveBlock = `
-      <div class="leave ${overdue ? 'urgent' : ''}">
-        <div class="leave-label">${overdue ? 'Should have left' : 'Leave by'}</div>
-        <div class="leave-time">${esc(fmtTime(leave))}</div>
-        <div class="leave-rel">${esc(relative(leave, now))} · ${leadFor(it)} min before</div>
-      </div>`;
-  }
-
-  const route = [it.from, it.to].filter(Boolean).map(esc).join(' <span class="arrow">→</span> ');
-  const bits = [];
-  if (it.provider) bits.push(esc(it.provider));
-  if (it.ref) bits.push(`<span class="ref">${esc(it.ref)}</span>`);
-  if (it.seat) bits.push(esc(it.seat));
-
-  const payBadge = paymentBadge(it);
+  const route = it.from || it.to
+    ? `<p class="focus-route">${esc(it.from || '')}${it.from && it.to ? '<span class="sep">to</span>' : ''}<span class="to">${esc(it.to || '')}</span></p>`
+    : '';
 
   return `
-    <div class="card hero" data-edit="${esc(it.id)}">
-      <div class="hero-top">
-        <span class="hero-icon">${icon}</span>
-        <div>
-          <div class="hero-when">${esc(fmtDayLong(start))} · ${esc(fmtTime(start))}</div>
-          <div class="hero-title">${esc(it.title || meta.label)}</div>
-          ${route ? `<div class="hero-route">${route}</div>` : ''}
-        </div>
+    <button class="focus ${overdue ? 'overdue' : ''}" data-open="${esc(it.id)}">
+      <div class="focus-head">
+        ${icon(iconFor(it), { size: 18 })}
+        <span class="focus-when">${esc(fmtDayShort(start))} · ${esc(fmtTime(start))}</span>
       </div>
-      ${leaveBlock}
-      ${bits.length ? `<div class="hero-bits">${bits.join(' · ')}</div>` : ''}
-      ${payBadge}
-      ${it.notes ? `<div class="hero-notes">${esc(it.notes)}</div>` : ''}
-      <div class="hero-countdown">${esc(relative(start, now))}</div>
-    </div>`;
-}
-
-function paymentBadge(it) {
-  const st = PAY_STATUS[it.payStatus];
-  if (!st) return '';
-  if (it.settledAt) return `<div class="pay-badge done">Paid ✓</div>`;
-  if (!st.needsMoney) return '';
-  const cashy = it.payMethod === 'cash';
-  const amt = it.amount ? fmtMoney(it.amount, it.currency) : 'amount unknown';
-  return `<div class="pay-badge ${cashy ? 'cash' : ''}">${cashy ? '💵 Cash needed' : '💳 Pay on arrival'} · ${esc(amt)}</div>`;
+      <h1 class="focus-title">${esc(it.title || (ITEM_TYPES[it.type] || {}).label || 'Untitled')}</h1>
+      ${route}
+      <div class="depart">
+        <span class="depart-label">${leave ? (overdue ? 'Should have left' : 'Leave by') : 'Starts'}</span>
+        <time class="depart-time">${esc(fmtTime(shown))}</time>
+        <span class="depart-rel">${esc(relative(shown, now))}${leave ? ` · ${leadFor(it)} min before` : ''}</span>
+      </div>
+    </button>`;
 }
 
 /* ------------------------------------------------------------ view: plan --- */
 
-function viewPlan() {
-  const now = new Date();
-  const groups = groupByDay(state.items);
-  if (!groups.size) {
-    view.innerHTML = `<div class="empty"><div class="empty-glyph">🗓</div><h2>Nothing planned</h2>
-      <p>Tap ＋ to add your first flight, pickup or booking.</p></div>`;
-    return;
-  }
-  let html = '';
-  for (const [key, items] of groups) {
-    const d = key === 'unscheduled' ? null : parseLocal(key);
-    const isToday = d && dayDiff(d, now) === 0;
-    html += `<h3 class="section ${isToday ? 'today' : ''}">${d ? esc(fmtDayLong(d)) : 'No date yet'}${isToday ? ' <span class="pill">today</span>' : ''}</h3>`;
-    html += `<div class="list">${items.map(it => itemRow(it, now)).join('')}</div>`;
-  }
-  view.innerHTML = html;
-  wireRows();
+function matches(it, q) {
+  if (!q) return true;
+  return [it.title, it.from, it.to, it.provider, it.ref, it.notes, it.seat]
+    .filter(Boolean).join(' ').toLowerCase().includes(q);
 }
 
-function itemRow(it, now) {
+function viewPlan() {
+  const now = new Date();
+  const q = state.query.trim().toLowerCase();
+  const shown = state.items.filter(it => matches(it, q));
+
+  let html = `
+    <div class="search">
+      ${icon('search', { size: 17 })}
+      <input id="q" type="search" placeholder="Search bookings and refs" value="${esc(state.query)}"
+             autocapitalize="none" autocorrect="off" spellcheck="false">
+    </div>`;
+
+  if (!shown.length) {
+    html += q
+      ? `<div class="empty">${canopy({ fruit: true })}<h2>No matches</h2><p>Nothing here mentions “${esc(state.query)}”.</p></div>`
+      : `<div class="empty">${canopy({ fruit: true })}<h2>Nothing planned</h2>
+         <p>Add the first flight or booking with the plus button.</p></div>`;
+  } else {
+    html += `<div class="trail">`;
+    for (const [key, items] of groupByDay(shown)) {
+      const d = key === 'unscheduled' ? null : parseLocal(key);
+      const today = d && dayDiff(d, now) === 0;
+      html += `<h2 class="day-label ${today ? 'today' : ''}">${d ? esc(fmtDayLong(d)) : 'No date yet'}</h2>`;
+      html += items.map(it => stopRow(it, now, q)).join('');
+    }
+    html += `</div>`;
+  }
+
+  view.innerHTML = html;
+  wire();
+
+  const input = $('#q');
+  input.addEventListener('input', () => {
+    const pos = input.selectionStart;
+    state.query = input.value;
+    viewPlan();
+    const next = $('#q');
+    next.focus();
+    next.setSelectionRange(pos, pos);
+  });
+}
+
+function stopRow(it, now, q) {
   const start = parseLocal(it.start);
-  const meta = ITEM_TYPES[it.type] || ITEM_TYPES.other;
-  const icon = it.type === 'transport' ? (TRANSPORT_MODES[it.mode]?.icon || meta.icon) : meta.icon;
-  const leave = leaveByDate(it);
-  const past = start && start < now;
-  const route = [it.from, it.to].filter(Boolean).map(esc).join(' → ');
-  const sub = [route, it.provider && esc(it.provider), it.ref && esc(it.ref)].filter(Boolean).join(' · ');
-  const cashy = !it.settledAt && PAY_STATUS[it.payStatus]?.needsMoney && (it.payMethod === 'cash' || it.payMethod === 'either');
-  const nFiles = filesFor(it.id).length;
+  const done = start && start < now;
+  const isNext = nextUp(state.items, now)?.id === it.id;
+
+  // One sub-line at most. While searching, show the reference instead of the
+  // route, because that is what you were looking for.
+  let sub = '';
+  if (q && it.ref) sub = `<span class="stop-sub ref selectable">${esc(it.ref)}</span>`;
+  else if (it.from || it.to) sub = `<span class="stop-sub">${esc([it.from, it.to].filter(Boolean).join(' to '))}</span>`;
+  else if (it.provider) sub = `<span class="stop-sub">${esc(it.provider)}</span>`;
+
+  const owes = !it.settledAt && PAY_STATUS[it.payStatus]?.needsMoney
+    && (it.payMethod === 'cash' || it.payMethod === 'either');
 
   return `
-    <button class="row ${past ? 'past' : ''}" data-edit="${esc(it.id)}">
-      <div class="row-time">${start ? esc(fmtTime(start)) : '—'}</div>
-      <div class="row-main">
-        <div class="row-title">${icon} ${esc(it.title || meta.label)}</div>
-        ${sub ? `<div class="row-sub">${sub}</div>` : ''}
-        ${leave ? `<div class="row-leave">leave ${esc(fmtTime(leave))}</div>` : ''}
-      </div>
-      <div class="row-right">
-        ${cashy ? `<span class="tag cash">${it.payMethod === 'cash' ? '💵' : '💳'} ${esc(it.amount ? fmtMoney(it.amount, it.currency) : '?')}</span>` : ''}
-        ${nFiles ? `<span class="tag">📎${nFiles}</span>` : ''}
-      </div>
+    <button class="stop ${done ? 'done' : ''} ${isNext ? 'now' : ''}" data-open="${esc(it.id)}">
+      <span class="stop-time">${start ? esc(fmtTime(start)) : '—'}</span>
+      <span class="stop-body">
+        <span class="stop-title">${esc(it.title || 'Untitled')}</span>
+        ${sub}
+      </span>
+      ${owes ? `<span class="stop-mark cash">${icon('wallet', { size: 16 })}</span>` : ''}
     </button>`;
 }
 
@@ -260,238 +269,378 @@ function viewCash() {
   const settled = state.items.filter(it => it.settledAt);
 
   if (!plan.length && !settled.length) {
-    view.innerHTML = `<div class="empty"><div class="empty-glyph">💷</div><h2>No cash owed</h2>
-      <p>Mark a booking as “Pay at the place” with a cash method and it shows up here.</p></div>`;
+    view.innerHTML = `
+      <div class="empty">
+        ${canopy({ fruit: true })}
+        <h2>Nothing owed</h2>
+        <p>Mark a booking “pay at the place” and what you owe collects here.</p>
+      </div>`;
     return;
   }
 
   let html = '';
   for (const c of plan) {
     html += `
-      <div class="card cash-card">
-        <div class="cash-head">
-          <div>
-            <div class="cash-cur">${esc(c.currency)}</div>
-            ${c.firstNeeded ? `<div class="cash-when">first needed ${esc(fmtDayLong(c.firstNeeded))}</div>` : ''}
-          </div>
-          <div class="cash-total">
-            <strong>${esc(fmtMoney(c.certain, c.currency))}</strong>
-            <span>cash only</span>
-          </div>
+      <section class="purse">
+        <div class="purse-sum">
+          ${c.certain > 0
+            ? `<span class="purse-amount">${esc(fmtMoney(c.certain, c.currency))}</span>
+               <span class="purse-cur">cash</span>`
+            : `<span class="purse-amount">${esc(c.currency)}</span>
+               <span class="purse-cur">amounts not set</span>`}
         </div>
-        ${c.maybe ? `<div class="cash-maybe">+ ${esc(fmtMoney(c.maybe, c.currency))} that could go on card</div>` : ''}
-        <div class="cash-items">
-          ${c.items.map(it => {
-            const d = parseLocal(it.start);
-            return `<div class="cash-item">
-              <label class="tick"><input type="checkbox" data-settle="${esc(it.id)}"><span></span></label>
-              <button class="cash-item-main" data-edit="${esc(it.id)}">
-                <div class="row-title">${esc(it.title || 'Untitled')}</div>
-                <div class="row-sub">${d ? esc(fmtDayLong(d)) : 'no date'} · ${esc(PAY_METHOD[it.payMethod]?.label || '')}</div>
-              </button>
-              <div class="cash-amt">${esc(it.amount ? fmtMoney(it.amount, it.currency) : '?')}</div>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>`;
+        <p class="purse-when">${c.firstNeeded ? `First needed ${esc(fmtDayLong(c.firstNeeded))}` : 'No date set'}</p>
+        ${c.maybe ? `<p class="purse-maybe">${esc(fmtMoney(c.maybe, c.currency))} more could go on a card.</p>` : ''}
+        ${c.items.map(it => {
+          const d = parseLocal(it.start);
+          return `
+          <div class="owe">
+            <label class="tick"><input type="checkbox" data-settle="${esc(it.id)}" aria-label="Mark paid"><span></span></label>
+            <button class="owe-body" data-open="${esc(it.id)}">
+              <span class="owe-title">${esc(it.title || 'Untitled')}</span>
+              <span class="owe-sub">${d ? esc(fmtDayShort(d)) : 'No date'}</span>
+            </button>
+            <span class="owe-amount">${esc(it.amount ? fmtMoney(it.amount, it.currency) : '—')}</span>
+          </div>`;
+        }).join('')}
+      </section>`;
   }
 
   if (settled.length) {
-    html += `<h3 class="section">Settled</h3><div class="list">` + settled.map(it => `
-      <div class="row settled">
-        <div class="row-main">
-          <div class="row-title">${esc(it.title || 'Untitled')}</div>
-          <div class="row-sub">${esc(it.amount ? fmtMoney(it.amount, it.currency) : '')}</div>
-        </div>
-        <button class="link" data-unsettle="${esc(it.id)}">undo</button>
-      </div>`).join('') + `</div>`;
+    html += `<p class="eyebrow">Paid</p>`;
+    html += settled.map(it => `
+      <div class="owe settled">
+        <button class="owe-body" data-open="${esc(it.id)}">
+          <span class="owe-title">${esc(it.title || 'Untitled')}</span>
+        </button>
+        <button class="text-btn" data-unsettle="${esc(it.id)}">Undo</button>
+      </div>`).join('');
   }
 
   view.innerHTML = html;
-  wireRows();
+  wire();
 
-  view.querySelectorAll('[data-settle]').forEach(el => {
-    el.addEventListener('change', async () => {
-      const it = state.items.find(x => x.id === el.dataset.settle);
-      it.settledAt = Date.now();
-      await saveItem(it);
-      toast('Marked as paid');
-    });
-  });
-  view.querySelectorAll('[data-unsettle]').forEach(el => {
-    el.addEventListener('click', async () => {
-      const it = state.items.find(x => x.id === el.dataset.unsettle);
-      it.settledAt = null;
-      await saveItem(it);
-    });
-  });
+  view.querySelectorAll('[data-settle]').forEach(el => el.addEventListener('change', async () => {
+    const it = state.items.find(x => x.id === el.dataset.settle);
+    it.settledAt = Date.now();
+    await saveItem(it);
+    toast('Marked paid');
+  }));
+  view.querySelectorAll('[data-unsettle]').forEach(el => el.addEventListener('click', async () => {
+    const it = state.items.find(x => x.id === el.dataset.unsettle);
+    it.settledAt = null;
+    await saveItem(it);
+  }));
 }
 
-/* -------------------------------------------------------- view: bookings --- */
+/* --------------------------------------------------------------- sheets --- */
 
-function viewBookings() {
-  const q = state.query.toLowerCase();
-  const withRefs = sortItems(state.items).filter(it =>
-    it.ref || it.provider || filesFor(it.id).length
-  ).filter(it => !q || JSON.stringify(it).toLowerCase().includes(q));
+function openSheet(title, bodyHtml, onSave) {
+  $('#sheetTitle').textContent = title;
+  $('#sheetBody').innerHTML = bodyHtml;
+  $('#sheet').hidden = false;
+  document.body.classList.add('locked');
 
-  let html = `<div class="search"><input type="search" id="q" placeholder="Search refs, places, notes" value="${esc(state.query)}"></div>`;
+  const save = $('#sheetSave');
+  const cancel = document.querySelector('.sheet-head [data-close]');
+  save.hidden = !onSave;
+  cancel.textContent = onSave ? 'Cancel' : 'Done';
+  if (onSave) save.onclick = onSave;
+}
 
-  if (!withRefs.length) {
-    html += `<div class="empty"><div class="empty-glyph">🎟</div><h2>No confirmations</h2>
-      <p>Add a booking reference or attach a PDF to an item and it lands here.</p></div>`;
-  } else {
-    html += `<div class="list">` + withRefs.map(it => {
-      const d = parseLocal(it.start);
-      const files = filesFor(it.id);
-      return `<div class="row booking">
-        <div class="row-main">
-          <div class="row-title">${esc(it.title || 'Untitled')}</div>
-          <div class="row-sub">${[d && fmtDayLong(d), it.provider].filter(Boolean).map(esc).join(' · ')}</div>
-          ${it.ref ? `<div class="bigref" data-copy="${esc(it.ref)}">${esc(it.ref)} <span class="copy">copy</span></div>` : ''}
-          ${files.length ? `<div class="files">${files.map(f =>
-            `<button class="file-chip" data-file="${esc(f.id)}">📄 ${esc(f.name)}</button>`).join('')}</div>` : ''}
-        </div>
-        <button class="link" data-edit="${esc(it.id)}">edit</button>
-      </div>`;
-    }).join('') + `</div>`;
+function closeSheet() {
+  $('#sheet').hidden = true;
+  document.body.classList.remove('locked');
+}
+
+function formEl() {
+  const body = $('#sheetBody');
+  let form = body.querySelector('form');
+  if (!form) {
+    form = document.createElement('form');
+    while (body.firstChild) form.appendChild(body.firstChild);
+    body.appendChild(form);
   }
+  return form;
+}
 
-  view.innerHTML = html;
-  wireRows();
+function field(label, name, value, opts = {}) {
+  return `<label class="field">
+    <span>${esc(label)}</span>
+    <input name="${name}" type="${opts.type || 'text'}" value="${esc(value ?? '')}"
+      ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ''} ${opts.attrs || ''}>
+  </label>`;
+}
 
-  const q0 = $('#q');
-  q0.addEventListener('input', () => {
-    state.query = q0.value;
-    const pos = q0.selectionStart;
-    viewBookings();
-    const q1 = $('#q');
-    q1.focus();
-    q1.setSelectionRange(pos, pos);
+function select(label, name, value, options) {
+  return `<label class="field">
+    <span>${esc(label)}</span>
+    <select name="${name}">
+      ${Object.entries(options).map(([k, v]) =>
+        `<option value="${esc(k)}" ${k === value ? 'selected' : ''}>${esc(v.label || v)}</option>`).join('')}
+    </select>
+  </label>`;
+}
+
+/* ---------------------------------------------------------- edit: trip --- */
+
+function editTrip(tr) {
+  const t = tr || { id: null, name: '', start: '', end: '' };
+  openSheet(tr ? 'Edit trip' : 'New trip', `
+    ${field('Name', 'name', t.name, { placeholder: 'South America 2026' })}
+    ${field('First day', 'start', t.start, { type: 'date' })}
+    ${field('Last day', 'end', t.end, { type: 'date' })}
+    ${tr ? `<button type="button" class="btn quiet" id="delTrip">Delete this trip</button>` : ''}
+  `, async () => {
+    const f = new FormData(formEl());
+    const name = (f.get('name') || '').trim();
+    if (!name) { toast('Give the trip a name'); return; }
+    const rec = { id: t.id || uid(), name, start: f.get('start') || '', end: f.get('end') || '' };
+    await db.put('trips', rec);
+    await db.metaSet('activeTrip', rec.id);
+    closeSheet();
+    await load();
+    render();
   });
 
-  view.querySelectorAll('[data-copy]').forEach(el => {
-    el.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(el.dataset.copy); toast('Reference copied'); }
-      catch { toast('Copy failed — long-press to select'); }
+  $('#delTrip')?.addEventListener('click', async () => {
+    if (!confirm(`Delete “${t.name}” and everything in it? This cannot be undone.`)) return;
+    for (const it of await db.byIndex('items', 'tripId', t.id)) {
+      for (const fl of filesFor(it.id)) await db.del('files', fl.id);
+      await db.del('items', it.id);
+    }
+    await db.del('trips', t.id);
+    closeSheet();
+    await load();
+    render();
+    toast('Trip deleted');
+  });
+}
+
+/* ---------------------------------------------------------- edit: item --- */
+
+function editItem(existing) {
+  const it = existing ? { ...existing } : blankItem(state.tripId);
+  const isNew = !existing;
+  const pendingFiles = [];
+
+  openSheet(isNew ? 'Add to trip' : 'Edit', `
+    ${select('Kind', 'type', it.type, ITEM_TYPES)}
+    ${field('What is it', 'title', it.title, { placeholder: 'Fly to Cusco' })}
+
+    <div data-only="transport">
+      ${select('How', 'mode', it.mode, TRANSPORT_MODES)}
+      ${field('From', 'from', it.from, { placeholder: 'London' })}
+      ${field('To', 'to', it.to, { placeholder: 'Cusco' })}
+      ${field('Seat or vehicle', 'seat', it.seat, { placeholder: '14A' })}
+    </div>
+
+    ${field('Starts', 'start', it.start, { type: 'datetime-local' })}
+    ${field('Ends', 'end', it.end, { type: 'datetime-local' })}
+    ${field('Leave this many minutes early', 'leadMinutes', it.leadMinutes ?? '', {
+      type: 'number', placeholder: `${TRANSPORT_MODES[it.mode]?.lead ?? 0} by default`, attrs: 'min="0" step="5"' })}
+
+    <p class="sheet-section">Booking</p>
+    ${field('Booked with', 'provider', it.provider, { placeholder: 'LATAM' })}
+    ${field('Reference', 'ref', it.ref, { placeholder: 'XK9P2T' })}
+
+    <p class="sheet-section">Money</p>
+    ${select('Payment', 'payStatus', it.payStatus, PAY_STATUS)}
+    ${select('Method', 'payMethod', it.payMethod, PAY_METHOD)}
+    <div class="field-pair">
+      ${field('Amount', 'amount', it.amount, { type: 'number', attrs: 'step="0.01" min="0"' })}
+      ${field('Currency', 'currency', it.currency, { placeholder: 'PEN', attrs: 'maxlength="3" autocapitalize="characters"' })}
+    </div>
+
+    <p class="sheet-section">Notes</p>
+    <label class="field"><span>Anything worth remembering</span>
+      <textarea name="notes" rows="4" placeholder="Key safe code, meeting point, who to ask for">${esc(it.notes)}</textarea>
+    </label>
+
+    <p class="sheet-section">Attachments</p>
+    <div id="fileList" class="chip-row"></div>
+    <label class="btn">
+      Attach a photo or PDF
+      <input type="file" id="fileInput" accept="image/*,application/pdf" multiple hidden>
+    </label>
+    <p class="hint">Kept on this phone. Opens with no signal.</p>
+
+    ${isNew ? '' : `<button type="button" class="btn quiet" id="delItem">Delete this</button>`}
+  `, async () => {
+    const f = new FormData(formEl());
+    const next = {
+      ...it,
+      tripId: state.tripId,
+      type: f.get('type'),
+      title: (f.get('title') || '').trim(),
+      mode: f.get('mode'),
+      from: (f.get('from') || '').trim(),
+      to: (f.get('to') || '').trim(),
+      seat: (f.get('seat') || '').trim(),
+      start: f.get('start') || '',
+      end: f.get('end') || '',
+      leadMinutes: f.get('leadMinutes') === '' ? null : Number(f.get('leadMinutes')),
+      provider: (f.get('provider') || '').trim(),
+      ref: (f.get('ref') || '').trim().toUpperCase(),
+      payStatus: f.get('payStatus'),
+      payMethod: f.get('payMethod'),
+      amount: f.get('amount') || '',
+      currency: (f.get('currency') || '').trim().toUpperCase(),
+      notes: (f.get('notes') || '').trim(),
+    };
+    if (!next.title && !next.ref) { toast('Give it a name'); return; }
+    if (!next.id) next.id = uid();
+    for (const pending of pendingFiles) await db.put('files', { ...pending, itemId: next.id });
+    closeSheet();
+    await saveItem(next);
+    toast('Saved');
+  });
+
+  const refreshFiles = () => {
+    const all = [...(it.id ? filesFor(it.id) : []), ...pendingFiles];
+    $('#fileList').innerHTML = all.length
+      ? all.map(f => `<span class="chip">
+          <button type="button" class="text-btn" data-open-file="${esc(f.id)}" style="padding:0">${esc(f.name)}</button>
+          <button type="button" class="text-btn" data-rm="${esc(f.id)}" style="padding:0;color:var(--alert)">Remove</button>
+        </span>`).join('')
+      : `<p class="hint">Nothing attached.</p>`;
+
+    $('#fileList').querySelectorAll('[data-open-file]').forEach(el => el.addEventListener('click', () => {
+      const f = all.find(x => x.id === el.dataset.openFile);
+      const url = URL.createObjectURL(f.blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }));
+    $('#fileList').querySelectorAll('[data-rm]').forEach(el => el.addEventListener('click', async () => {
+      const id = el.dataset.rm;
+      const i = pendingFiles.findIndex(x => x.id === id);
+      if (i >= 0) pendingFiles.splice(i, 1);
+      else { await db.del('files', id); state.files = await db.all('files'); }
+      refreshFiles();
+    }));
+  };
+  refreshFiles();
+
+  $('#fileInput').addEventListener('change', e => {
+    for (const file of e.target.files) {
+      pendingFiles.push({ id: uid(), itemId: it.id, name: file.name, type: file.type, size: file.size, blob: file });
+    }
+    e.target.value = '';
+    refreshFiles();
+  });
+
+  const syncType = () => {
+    const type = formEl().querySelector('[name=type]').value;
+    $('#sheetBody').querySelectorAll('[data-only]').forEach(el => {
+      el.style.display = el.dataset.only === type ? '' : 'none';
     });
-  });
-  view.querySelectorAll('[data-file]').forEach(el => {
-    el.addEventListener('click', () => openFile(el.dataset.file));
-  });
+  };
+  formEl().querySelector('[name=type]').addEventListener('change', syncType);
+  syncType();
+
+  $('#delItem')?.addEventListener('click', () => deleteItem(it.id));
 }
 
-function openFile(id) {
-  const f = state.files.find(x => x.id === id);
-  if (!f) return;
-  const url = URL.createObjectURL(f.blob);
-  window.open(url, '_blank');
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
-}
+/* ------------------------------------------------------------- settings --- */
 
-/* ------------------------------------------------------------ view: more --- */
-
-function viewMore() {
-  const t = trip();
-  let html = `<h3 class="section">Trips</h3><div class="list">`;
-  for (const tr of state.trips) {
-    html += `<div class="row ${tr.id === state.tripId ? 'on' : ''}">
-      <button class="row-main" data-pick-trip="${esc(tr.id)}">
-        <div class="row-title">${esc(tr.name)}</div>
-        <div class="row-sub">${[tr.start, tr.end].filter(Boolean).map(esc).join(' → ') || 'no dates'}</div>
-      </button>
-      <button class="link" data-edit-trip="${esc(tr.id)}">edit</button>
-    </div>`;
-  }
-  html += `</div><button class="btn" data-new-trip>＋ New trip</button>`;
-
+function openSettings() {
   const bytes = state.files.reduce((a, f) => a + (f.size || 0), 0);
-  html += `
-    <h3 class="section">Backup &amp; sharing</h3>
-    <div class="card">
-      <p class="hint">No signal needed. Export writes one file with every trip, item and attachment. AirDrop it to your partner, then they use Import.</p>
-      <div class="btn-row">
-        <button class="btn" id="exportBtn">Export file</button>
-        <button class="btn" id="importBtn">Import file</button>
+
+  openSheet('Settings', `
+    <p class="sheet-section">Trips</p>
+    <div class="rowlist">
+      ${state.trips.map(tr => `
+        <div class="rowline ${tr.id === state.tripId ? 'on' : ''}">
+          <button class="rowline-body" data-pick="${esc(tr.id)}">
+            <span class="rowline-title">${esc(tr.name)}</span>
+            <span class="rowline-sub">${esc([tr.start, tr.end].filter(Boolean).join(' to ') || 'No dates')}</span>
+          </button>
+          <button class="text-btn" data-edit-trip="${esc(tr.id)}">Edit</button>
+        </div>`).join('')}
+    </div>
+    <button type="button" class="btn" id="newTrip">Start another trip</button>
+
+    <p class="sheet-section">Reminders</p>
+    <div class="panel">
+      <p class="hint">This app can't buzz you on its own. Your phone's Calendar can. Send the trip
+        across and it handles the alarms itself, offline, with this closed.</p>
+      <p class="hint">You'll be nudged at each leave-by time, at every departure, at check in and
+        check out, and the evening before you first need cash.</p>
+      <button type="button" class="btn" id="icsBtn">${icon('calendar', { size: 18 })} Send to Calendar</button>
+      <p class="hint">Put it in a calendar of its own so an old plan can be cleared in one go.</p>
+    </div>
+
+    <p class="sheet-section">Backup and sharing</p>
+    <div class="panel">
+      <p class="hint">One file holds every trip, item and attachment. AirDrop it across — no wifi
+        or internet needed — and the other phone opens it with Restore.</p>
+      <div class="btn-pair">
+        <button type="button" class="btn" id="exportBtn">${icon('share', { size: 18 })} Back up</button>
+        <button type="button" class="btn" id="importBtn">${icon('inbox', { size: 18 })} Restore</button>
       </div>
       <input type="file" id="importInput" accept=".json,application/json" hidden>
-      <p class="hint small">${state.files.length} attachment${state.files.length === 1 ? '' : 's'} · ${(bytes / 1048576).toFixed(1)} MB stored on this phone.</p>
-      <p class="hint small" id="quota"></p>
+      <p class="hint">${state.files.length} attachment${state.files.length === 1 ? '' : 's'}, ${(bytes / 1048576).toFixed(1)} MB on this phone.</p>
+      <p class="hint" id="quota"></p>
     </div>
 
-    <h3 class="section">Phone reminders</h3>
-    <div class="card">
-      <p class="hint">This app cannot buzz you on its own. The phone's Calendar can. Send the trip across and iOS handles the alarms itself — offline, app closed.</p>
-      <p class="hint small">You get a nudge at each <strong>leave by</strong> time, at every departure, at check in and check out, and the evening before you first need cash.</p>
-      <button class="btn" id="icsBtn">Send trip to Calendar</button>
-      <p class="hint small">Import it into a calendar of its own (Calendar → Add Calendar) so you can delete the lot in one go when the plan changes.</p>
+    <p class="sheet-section">Keeping it installed</p>
+    <div class="panel">
+      <p class="hint">Open in Safari, then Share and <strong>Add to Home Screen</strong>. Launch it from
+        the icon rather than the browser, or iOS keeps two separate copies of your data.</p>
+      <p class="hint">iOS can clear web storage after weeks of not opening an app. Back up before every trip.</p>
     </div>
 
-    <h3 class="section">Keeping it installed</h3>
-    <div class="card">
-      <p class="hint">Open in Safari → Share → <strong>Add to Home Screen</strong>. Launch it from the icon, not the browser, or iOS may clear the data.</p>
-      <p class="hint">iOS can wipe web storage if the app sits unused for weeks. Export a backup before every trip.</p>
-    </div>
+    <button type="button" class="btn quiet" id="wipeBtn">Erase everything on this phone</button>
+  `, null);
 
-    <div class="card danger-card">
-      <button class="btn danger" id="wipeBtn">Erase everything on this phone</button>
-    </div>`;
-
-  view.innerHTML = html;
-
-  view.querySelectorAll('[data-pick-trip]').forEach(el => el.addEventListener('click', async () => {
-    await db.metaSet('activeTrip', el.dataset.pickTrip);
+  const body = $('#sheetBody');
+  body.querySelectorAll('[data-pick]').forEach(el => el.addEventListener('click', async () => {
+    await db.metaSet('activeTrip', el.dataset.pick);
+    closeSheet();
     await load();
     location.hash = '#/now';
     render();
   }));
-  view.querySelectorAll('[data-edit-trip]').forEach(el => el.addEventListener('click', () => {
-    editTrip(state.trips.find(x => x.id === el.dataset.editTrip));
-  }));
-  view.querySelector('[data-new-trip]').addEventListener('click', () => editTrip(null));
-  showQuota();
+  body.querySelectorAll('[data-edit-trip]').forEach(el => el.addEventListener('click', () =>
+    editTrip(state.trips.find(x => x.id === el.dataset.editTrip))));
+  $('#newTrip').addEventListener('click', () => editTrip(null));
   $('#icsBtn').addEventListener('click', exportIcs);
   $('#exportBtn').addEventListener('click', exportAll);
   $('#importBtn').addEventListener('click', () => $('#importInput').click());
   $('#importInput').addEventListener('change', e => importFile(e.target.files[0]));
   $('#wipeBtn').addEventListener('click', async () => {
-    if (!confirm('This erases every trip, item and attachment stored on this phone. Export a backup first. Continue?')) return;
+    if (!confirm('This erases every trip, item and attachment on this phone. Back up first. Continue?')) return;
     if (!confirm('Really erase everything? This cannot be undone.')) return;
     await db.clearAll();
+    closeSheet();
     await load();
     render();
     toast('Erased');
   });
-  if (!t) view.querySelectorAll('.row.on').forEach(el => el.classList.remove('on'));
+  showQuota();
 }
 
-// Worth surfacing: the browser decides how much room this app gets, and
-// whether it survives being unused. Both matter once photos go in here.
+// The browser decides how much room this gets and whether it survives being
+// unused, so both are worth showing rather than hiding.
 async function showQuota() {
   const el = $('#quota');
   if (!el || !navigator.storage?.estimate) return;
   try {
     const { usage = 0, quota = 0 } = await navigator.storage.estimate();
     const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
-    el.textContent = `Browser allowance: ${(usage / 1048576).toFixed(1)} MB used of ${(quota / 1073741824).toFixed(2)} GB · `
-      + (persisted ? 'storage is marked persistent' : 'storage is NOT persistent — back up regularly');
-  } catch { /* estimate unsupported; the attachment total above still shows */ }
+    el.textContent = `${(usage / 1048576).toFixed(1)} MB used of ${(quota / 1073741824).toFixed(2)} GB allowed. `
+      + (persisted ? 'Storage is marked persistent.' : 'Storage is not persistent — back up regularly.');
+  } catch { /* estimate unsupported; the totals above still show */ }
 }
 
 /* ------------------------------------------------------- export / import --- */
 
-function blobToDataUrl(blob) {
-  return new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result);
-    r.onerror = rej;
-    r.readAsDataURL(blob);
-  });
-}
-
-async function dataUrlToBlob(url) {
-  return (await fetch(url)).blob();
-}
+const blobToDataUrl = blob => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res(r.result);
+  r.onerror = rej;
+  r.readAsDataURL(blob);
+});
 
 async function exportAll() {
   const files = [];
@@ -516,18 +665,13 @@ async function exportAll() {
 async function exportIcs() {
   const t = trip();
   if (!t) { toast('No trip selected'); return; }
-  const dated = state.items.filter(it => it.start);
-  if (!dated.length) { toast('Nothing with a date yet'); return; }
+  if (!state.items.some(it => it.start)) { toast('Nothing has a date yet'); return; }
   const slug = (t.name || 'trip').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'trip';
-  await shareOrDownload(
-    new Blob([buildIcs(t, state.items)], { type: 'text/calendar' }),
-    `${slug}.ics`,
-    t.name
-  );
+  await shareOrDownload(new Blob([buildIcs(t, state.items)], { type: 'text/calendar' }), `${slug}.ics`, t.name);
 }
 
 // The share sheet is the useful path on iOS: it reaches Calendar, Files and
-// AirDrop. A plain download link is the desktop fallback.
+// AirDrop in one go. A download link is the desktop fallback.
 async function shareOrDownload(blob, name, title) {
   const file = new File([blob], name, { type: blob.type });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -548,267 +692,61 @@ async function shareOrDownload(blob, name, title) {
 async function importFile(file) {
   if (!file) return;
   let payload;
-  try {
-    payload = JSON.parse(await file.text());
-  } catch {
-    toast('That file is not a Trips backup');
-    return;
-  }
-  if (payload.format !== 'trips-export') {
-    toast('That file is not a Trips backup');
-    return;
-  }
-  const counts = { trips: payload.trips?.length || 0, items: payload.items?.length || 0 };
-  if (!confirm(`Merge ${counts.trips} trip(s) and ${counts.items} item(s) from this file? Anything with the same id is overwritten by the incoming copy.`)) return;
+  try { payload = JSON.parse(await file.text()); }
+  catch { toast('That is not a Trips backup'); return; }
+  if (payload.format !== 'trips-export') { toast('That is not a Trips backup'); return; }
+
+  const nTrips = payload.trips?.length || 0;
+  const nItems = payload.items?.length || 0;
+  if (!confirm(`Restore ${nTrips} trip(s) and ${nItems} item(s)? Anything already here with the same id is replaced by the incoming copy.`)) return;
 
   await db.putMany('trips', payload.trips || []);
   await db.putMany('items', payload.items || []);
-  // Land on what was just imported, rather than silently falling back to the
-  // earliest trip and looking like the import did nothing.
-  if (payload.trips?.length) await db.metaSet('activeTrip', payload.trips[0].id);
   for (const f of payload.files || []) {
-    await db.put('files', { id: f.id, itemId: f.itemId, name: f.name, type: f.type, size: f.size, blob: await dataUrlToBlob(f.data) });
-  }
-  await load();
-  render();
-  toast('Imported');
-}
-
-/* ----------------------------------------------------------- edit sheets --- */
-
-function openSheet(title, bodyHtml, onSave) {
-  $('#sheetTitle').textContent = title;
-  $('#sheetBody').innerHTML = bodyHtml;
-  $('#sheet').hidden = false;
-  document.body.classList.add('locked');
-  $('#sheetSave').onclick = onSave;
-}
-
-function closeSheet() {
-  $('#sheet').hidden = true;
-  document.body.classList.remove('locked');
-}
-
-function field(label, name, value, opts = {}) {
-  const type = opts.type || 'text';
-  return `<label class="field ${opts.cls || ''}">
-    <span>${esc(label)}</span>
-    <input name="${name}" type="${type}" value="${esc(value ?? '')}" ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ''} ${opts.attrs || ''}>
-  </label>`;
-}
-
-function select(label, name, value, options) {
-  return `<label class="field">
-    <span>${esc(label)}</span>
-    <select name="${name}">
-      ${Object.entries(options).map(([k, v]) =>
-        `<option value="${esc(k)}" ${k === value ? 'selected' : ''}>${esc(v.label || v)}</option>`).join('')}
-    </select>
-  </label>`;
-}
-
-function editTrip(tr) {
-  const t = tr || { id: null, name: '', start: '', end: '' };
-  openSheet(tr ? 'Edit trip' : 'New trip', `
-    ${field('Trip name', 'name', t.name, { placeholder: 'Lisbon, October' })}
-    ${field('First day', 'start', t.start, { type: 'date' })}
-    ${field('Last day', 'end', t.end, { type: 'date' })}
-    ${tr ? `<button class="btn danger" id="delTrip">Delete trip</button>` : ''}
-  `, async () => {
-    const f = new FormData(formEl());
-    const name = (f.get('name') || '').trim();
-    if (!name) { toast('Give the trip a name'); return; }
-    const rec = { id: t.id || uid(), name, start: f.get('start') || '', end: f.get('end') || '' };
-    await db.put('trips', rec);
-    await db.metaSet('activeTrip', rec.id);
-    closeSheet();
-    await load();
-    render();
-  });
-
-  $('#delTrip')?.addEventListener('click', async () => {
-    if (!confirm(`Delete "${t.name}" and every item in it? This cannot be undone.`)) return;
-    for (const it of await db.byIndex('items', 'tripId', t.id)) {
-      for (const fl of filesFor(it.id)) await db.del('files', fl.id);
-      await db.del('items', it.id);
-    }
-    await db.del('trips', t.id);
-    closeSheet();
-    await load();
-    render();
-    toast('Trip deleted');
-  });
-}
-
-function formEl() {
-  const body = $('#sheetBody');
-  let form = body.querySelector('form');
-  if (!form) {
-    form = document.createElement('form');
-    while (body.firstChild) form.appendChild(body.firstChild);
-    body.appendChild(form);
-  }
-  return form;
-}
-
-function editItem(existing) {
-  const it = existing ? { ...existing } : blankItem(state.tripId);
-  const isNew = !existing;
-  const modeDefault = TRANSPORT_MODES[it.mode]?.lead ?? 0;
-
-  const html = `
-    ${select('Kind', 'type', it.type, ITEM_TYPES)}
-    ${field('What is it', 'title', it.title, { placeholder: 'BA2551 to Faro' })}
-
-    <div data-only="transport">
-      ${select('Mode', 'mode', it.mode, TRANSPORT_MODES)}
-      ${field('From', 'from', it.from, { placeholder: 'Gatwick' })}
-      ${field('To', 'to', it.to, { placeholder: 'Faro' })}
-      ${field('Seat / vehicle', 'seat', it.seat, { placeholder: '14A' })}
-    </div>
-
-    ${field('Starts', 'start', it.start, { type: 'datetime-local' })}
-    ${field('Ends (optional)', 'end', it.end, { type: 'datetime-local' })}
-    ${field('Leave this many minutes early', 'leadMinutes', it.leadMinutes ?? '', {
-      type: 'number', placeholder: `default ${modeDefault} min`, attrs: 'min="0" step="5"' })}
-
-    <h4 class="sheet-section">Booking</h4>
-    ${field('Provider', 'provider', it.provider, { placeholder: 'Europcar' })}
-    ${field('Reference', 'ref', it.ref, { placeholder: 'XK9P2T' })}
-
-    <h4 class="sheet-section">Money</h4>
-    ${select('Payment', 'payStatus', it.payStatus, PAY_STATUS)}
-    ${select('Method', 'payMethod', it.payMethod, PAY_METHOD)}
-    <div class="field-row">
-      ${field('Amount', 'amount', it.amount, { type: 'number', attrs: 'step="0.01" min="0"' })}
-      ${field('Currency', 'currency', it.currency, { placeholder: 'EUR', attrs: 'maxlength="3" autocapitalize="characters"' })}
-    </div>
-
-    <h4 class="sheet-section">Notes</h4>
-    <label class="field"><span>Anything else</span>
-      <textarea name="notes" rows="3" placeholder="Key safe code, meeting point, who to ask for">${esc(it.notes)}</textarea>
-    </label>
-
-    <h4 class="sheet-section">Attachments</h4>
-    <div id="fileList" class="file-list"></div>
-    <label class="btn file-add">
-      Attach a photo or PDF
-      <input type="file" id="fileInput" accept="image/*,application/pdf" multiple hidden>
-    </label>
-    <p class="hint small">Stored on this phone, opens with no signal.</p>
-
-    ${isNew ? '' : `<button class="btn danger" id="delItem">Delete item</button>`}
-  `;
-
-  openSheet(isNew ? 'New item' : 'Edit item', html, async () => {
-    const f = new FormData(formEl());
-    const next = {
-      ...it,
-      id: it.id,
-      tripId: state.tripId,
-      type: f.get('type'),
-      title: (f.get('title') || '').trim(),
-      mode: f.get('mode'),
-      from: (f.get('from') || '').trim(),
-      to: (f.get('to') || '').trim(),
-      seat: (f.get('seat') || '').trim(),
-      start: f.get('start') || '',
-      end: f.get('end') || '',
-      leadMinutes: f.get('leadMinutes') === '' ? null : Number(f.get('leadMinutes')),
-      provider: (f.get('provider') || '').trim(),
-      ref: (f.get('ref') || '').trim().toUpperCase(),
-      payStatus: f.get('payStatus'),
-      payMethod: f.get('payMethod'),
-      amount: f.get('amount') || '',
-      currency: (f.get('currency') || '').trim().toUpperCase(),
-      notes: (f.get('notes') || '').trim(),
-    };
-    if (!next.title && !next.ref) { toast('Give it a title'); return; }
-    if (!next.id) next.id = uid();
-
-    // Attachments picked before the item existed were parked under a temp id.
-    for (const pending of pendingFiles) {
-      await db.put('files', { ...pending, itemId: next.id });
-    }
-    pendingFiles.length = 0;
-
-    closeSheet();
-    await saveItem(next);
-    toast('Saved');
-  });
-
-  const pendingFiles = [];
-  const refreshFiles = () => {
-    const existingFiles = it.id ? filesFor(it.id) : [];
-    const all = [...existingFiles, ...pendingFiles];
-    $('#fileList').innerHTML = all.length
-      ? all.map(f => `<div class="file-chip-row">
-          <button type="button" class="file-chip" data-open="${esc(f.id)}">📄 ${esc(f.name)}</button>
-          <button type="button" class="link danger" data-rm="${esc(f.id)}">remove</button>
-        </div>`).join('')
-      : `<p class="hint small">Nothing attached.</p>`;
-
-    $('#fileList').querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => {
-      const f = all.find(x => x.id === el.dataset.open);
-      const url = URL.createObjectURL(f.blob);
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-    }));
-    $('#fileList').querySelectorAll('[data-rm]').forEach(el => el.addEventListener('click', async () => {
-      const id = el.dataset.rm;
-      const idx = pendingFiles.findIndex(x => x.id === id);
-      if (idx >= 0) pendingFiles.splice(idx, 1);
-      else { await db.del('files', id); state.files = await db.all('files'); }
-      refreshFiles();
-    }));
-  };
-  refreshFiles();
-
-  $('#fileInput').addEventListener('change', async e => {
-    for (const file of e.target.files) {
-      pendingFiles.push({ id: uid(), itemId: it.id, name: file.name, type: file.type, size: file.size, blob: file });
-    }
-    e.target.value = '';
-    refreshFiles();
-  });
-
-  const syncTypeFields = () => {
-    const type = formEl().querySelector('[name=type]').value;
-    $('#sheetBody').querySelectorAll('[data-only]').forEach(el => {
-      el.style.display = el.dataset.only === type ? '' : 'none';
+    await db.put('files', {
+      id: f.id, itemId: f.itemId, name: f.name, type: f.type, size: f.size,
+      blob: await (await fetch(f.data)).blob(),
     });
-  };
-  formEl().querySelector('[name=type]').addEventListener('change', syncTypeFields);
-  syncTypeFields();
-
-  $('#delItem')?.addEventListener('click', () => deleteItem(it.id));
+  }
+  // Land on what was just restored rather than the earliest trip, which would
+  // look like the restore did nothing.
+  if (payload.trips?.length) await db.metaSet('activeTrip', payload.trips[0].id);
+  closeSheet();
+  await load();
+  location.hash = '#/now';
+  render();
+  toast('Restored');
 }
 
 /* ---------------------------------------------------------------- wiring --- */
 
-function wireRows() {
-  view.querySelectorAll('[data-edit]').forEach(el => {
-    el.addEventListener('click', ev => {
-      ev.preventDefault();
-      const it = state.items.find(x => x.id === el.dataset.edit);
-      if (it) editItem(it);
-    });
+function wire() {
+  view.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', ev => {
+    ev.preventDefault();
+    const it = state.items.find(x => x.id === el.dataset.open);
+    if (it) editItem(it);
+  }));
+}
+
+function paintChrome() {
+  $('#addBtn').innerHTML = icon('plus', { size: 22 });
+  $('#setBtn').innerHTML = icon('settings', { size: 20 });
+  const tabIcons = { now: 'clock', plan: 'route', cash: 'wallet' };
+  document.querySelectorAll('#tabs a').forEach(a => {
+    a.querySelector('.tab-ic').innerHTML = icon(tabIcons[a.dataset.tab], { size: 21 });
   });
 }
 
 function init() {
+  paintChrome();
   document.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', closeSheet));
-  $('#addBtn').addEventListener('click', () => {
-    if (!state.tripId) { editTrip(null); return; }
-    editItem(null);
-  });
-  $('#tripBtn').addEventListener('click', () => { location.hash = '#/more'; });
-  window.addEventListener('hashchange', render);
+  $('#addBtn').addEventListener('click', () => state.tripId ? editItem(null) : editTrip(null));
+  $('#setBtn').addEventListener('click', openSettings);
+  $('#tripBtn').addEventListener('click', openSettings);
+  window.addEventListener('hashchange', () => { state.query = ''; render(); });
 
-  // Keep the countdown honest without a full re-render storm.
-  setInterval(() => {
-    if ((location.hash || '#/now') === '#/now') render();
-  }, 30000);
+  // Keep the countdown honest without redrawing screens you are reading.
+  setInterval(() => { if ((location.hash || '#/now') === '#/now') render(); }, 30000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
 }
 
@@ -817,10 +755,6 @@ function init() {
   await load();
   if (!location.hash) location.hash = '#/now';
   render();
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  }
-  if (navigator.storage && navigator.storage.persist) {
-    navigator.storage.persist().catch(() => {});
-  }
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
 })();
