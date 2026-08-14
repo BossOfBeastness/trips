@@ -563,6 +563,9 @@ async function importFile(file) {
 
   await db.putMany('trips', payload.trips || []);
   await db.putMany('items', payload.items || []);
+  // Land on what was just imported, rather than silently falling back to the
+  // earliest trip and looking like the import did nothing.
+  if (payload.trips?.length) await db.metaSet('activeTrip', payload.trips[0].id);
   for (const f of payload.files || []) {
     await db.put('files', { id: f.id, itemId: f.itemId, name: f.name, type: f.type, size: f.size, blob: await dataUrlToBlob(f.data) });
   }
