@@ -3,8 +3,8 @@
 // running. That is the only way to get an offline nudge onto the phone.
 
 import {
-  TRANSPORT_MODES, ITEM_TYPES, PAY_STATUS,
-  parseLocal, leadFor, cashPlan, fmtMoney, sortItems,
+  TRANSPORT_MODES, ITEM_TYPES, PAY_STATUS, KINDS, kindOf,
+  parseLocal, leadFor, cashPlan, fmtMoney, sortItems, hasTime,
 } from './model.js';
 
 const PRODID = '-//Trips//Itinerary//EN';
@@ -56,50 +56,70 @@ function addMinutes(d, mins) {
   return new Date(d.getTime() + mins * 60000);
 }
 
-function alarm(minutesBefore, description) {
+function alarm(trigger, description) {
   return [
     'BEGIN:VALARM',
     'ACTION:DISPLAY',
-    `TRIGGER:-PT${Math.max(0, Math.round(minutesBefore))}M`,
+    `TRIGGER:${trigger}`,
     `DESCRIPTION:${escText(description)}`,
     'END:VALARM',
   ];
 }
 
-function describe(it) {
+const before = mins => `-PT${Math.max(0, Math.round(mins))}M`;
+
+// The calendar entry has to stand on its own — you will be reading it on a lock
+// screen, not opening the app. Most actionable first.
+function describe(it, { arrival = true, money = true } = {}) {
   const lines = [];
-  if (it.provider) lines.push(it.provider);
-  if (it.ref) lines.push(`Ref: ${it.ref}`);
-  if (it.seat) lines.push(`Seat/vehicle: ${it.seat}`);
-  const st = PAY_STATUS[it.payStatus];
+  if (it.docs) lines.push(`Bring: ${it.docs}`);
+
+  const end = parseLocal(it.end);
+  if (arrival && end && hasTime(it.end)) {
+    lines.push(`Arrives ${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`);
+  }
+
+  const st = money ? PAY_STATUS[it.payStatus] : null;
   if (st?.needsMoney && !it.settledAt) {
     const how = it.payMethod === 'cash' ? 'CASH' : it.payMethod === 'either' ? 'cash or card' : 'card';
     lines.push(`Pay on arrival (${how}): ${it.amount ? fmtMoney(it.amount, it.currency) : 'amount unknown'}`);
+  } else if (money && it.amount) {
+    lines.push(`Cost: ${fmtMoney(it.amount, it.currency)}`);
   }
+
+  if (it.ref) lines.push(`Ref: ${it.ref}`);
+  if (it.provider) lines.push(`Booked with: ${it.provider}`);
+  if (it.seat) lines.push(`Seat/vehicle: ${it.seat}`);
   if (it.notes) lines.push('', it.notes);
   return lines.join('\n');
 }
 
 function summaryFor(it, suffix = '') {
-  const meta = ITEM_TYPES[it.type] || ITEM_TYPES.other;
-  const icon = it.type === 'transport' ? (TRANSPORT_MODES[it.mode]?.icon || meta.icon) : meta.icon;
-  return `${icon} ${it.title || meta.label}${suffix}`;
+  return `${it.title || KINDS[kindOf(it)]?.label || 'Item'}${suffix}`;
 }
 
 function locationFor(it) {
   return [it.from, it.to].filter(Boolean).join(' → ');
 }
 
-function event({ uid, seq, start, end, summary, description, location, alarms }) {
+const dateOnly = d => `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`;
+
+function event({ uid, seq, start, end, summary, description, location, alarms, allDay }) {
   const out = [
     'BEGIN:VEVENT',
     `UID:${uid}`,
     `DTSTAMP:${utcStamp()}`,
     `SEQUENCE:${seq}`,
-    `DTSTART:${floating(start)}`,
-    `DTEND:${floating(end)}`,
-    `SUMMARY:${escText(summary)}`,
   ];
+  if (allDay) {
+    // A date with no time is a real state while planning, not missing data.
+    // Written as an all-day event so it sits at the top of the day rather than
+    // being buried at midnight.
+    out.push(`DTSTART;VALUE=DATE:${dateOnly(start)}`, `DTEND;VALUE=DATE:${dateOnly(end)}`);
+  } else {
+    out.push(`DTSTART:${floating(start)}`, `DTEND:${floating(end)}`);
+  }
+  out.push(`SUMMARY:${escText(summary)}`);
   if (location) out.push(`LOCATION:${escText(location)}`);
   if (description) out.push(`DESCRIPTION:${escText(description)}`);
   out.push(...(alarms || []));
@@ -121,21 +141,43 @@ function eventsForItem(it) {
     return [
       ...event({
         uid: `${it.id}-in@trips.local`, seq, start, end: addMinutes(start, 60),
-        summary: summaryFor(it, ' — check in'), description: desc, location: loc,
-        alarms: alarm(60, `Check in: ${it.title || 'stay'}`),
+        summary: summaryFor(it, ' — check in'),
+        description: describe(it, { arrival: false }),
+        location: loc,
+        alarms: alarm(before(60), `Check in: ${it.title || 'stay'}`),
       }),
+      // Check-out is its own moment: no arrival time, and the money was already
+      // stated on the way in.
       ...event({
         uid: `${it.id}-out@trips.local`, seq, start: end, end: addMinutes(end, 60),
-        summary: summaryFor(it, ' — check out'), description: desc, location: loc,
-        alarms: alarm(60, `Check out: ${it.title || 'stay'}`),
+        summary: summaryFor(it, ' — check out'),
+        description: describe(it, { arrival: false, money: false }),
+        location: loc,
+        alarms: alarm(before(60), `Check out: ${it.title || 'stay'}`),
       }),
     ];
   }
 
+  // No time yet: an all-day entry, nudged at 09:00 rather than at midnight.
+  if (!hasTime(it.start)) {
+    const next = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
+    return event({
+      uid: `${it.id}@trips.local`, seq, start, end: next, allDay: true,
+      summary: summaryFor(it), description: desc, location: loc,
+      alarms: alarm('PT9H', it.title || 'Today'),
+    });
+  }
+
+  // One alarm, at the moment you must act on it. A second buzz at the departure
+  // itself only trains you to ignore both. Flights alone get a day-before
+  // warning, because that is when a missed detail is still fixable.
   const lead = leadFor(it);
   const alarms = lead > 0
-    ? [...alarm(lead, `Leave now — ${it.title || 'next leg'}`), ...alarm(0, `${it.title || 'Departure'} now`)]
-    : alarm(30, it.title || 'Coming up');
+    ? alarm(before(lead), `Leave now — ${it.title || 'next leg'}`)
+    : alarm(before(30), it.title || 'Coming up');
+  if (kindOf(it) === 'flight') {
+    alarms.push(...alarm('-P1D', `Tomorrow: ${it.title || 'flight'}${it.docs ? ` — bring ${it.docs}` : ''}`));
+  }
 
   return event({
     uid: `${it.id}@trips.local`, seq, start,
@@ -158,10 +200,10 @@ function cashEvents(items) {
       seq: 0,
       start: when,
       end: addMinutes(when, 30),
-      summary: `💵 Draw out ${total}`,
+      summary: `Draw out ${total}`,
       description: `Cash needed from tomorrow${maybe}.\n\n`
-        + c.items.map(i => `• ${i.title || 'Untitled'} — ${i.amount ? fmtMoney(i.amount, i.currency) : '?'}`).join('\n'),
-      alarms: alarm(0, `Draw out ${total}`),
+        + c.items.map(i => `- ${i.title || 'Untitled'}: ${i.amount ? fmtMoney(i.amount, i.currency) : 'amount unknown'}`).join('\n'),
+      alarms: alarm(before(0), `Draw out ${total}`),
     }));
   }
   return out;

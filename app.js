@@ -624,10 +624,16 @@ function openSettings() {
     <div class="panel">
       <p class="hint">This app can't buzz you on its own. Your phone's Calendar can. Send the trip
         across and it handles the alarms itself, offline, with this closed.</p>
-      <p class="hint">You'll be nudged at each leave-by time, at every departure, at check in and
-        check out, and the evening before you first need cash.</p>
-      <button type="button" class="btn" id="icsBtn">${icon('calendar', { size: 18 })} Send to Calendar</button>
-      <p class="hint">Put it in a calendar of its own so an old plan can be cleared in one go.</p>
+      <p class="hint">One nudge at each leave-by time, a day-before warning on flights, check in
+        and check out for stays, and the evening before you first need cash.</p>
+      <div class="btn-pair">
+        <button type="button" class="btn" id="icsBtn">${icon('calendar', { size: 18 })} Send all</button>
+        <button type="button" class="btn" id="icsTravelBtn">Travel only</button>
+      </div>
+      <p class="hint"><strong>Import into a new calendar of its own</strong> (Calendar → Calendars →
+        Add Calendar). Sending again after you change the plan adds a second copy of everything, so
+        delete that calendar first and re-send. The file is named after the trip to make it obvious
+        which one to bin.</p>
     </div>
 
     <p class="sheet-section">Backup and sharing</p>
@@ -664,7 +670,8 @@ function openSettings() {
   body.querySelectorAll('[data-edit-trip]').forEach(el => el.addEventListener('click', () =>
     editTrip(state.trips.find(x => x.id === el.dataset.editTrip))));
   $('#newTrip').addEventListener('click', () => editTrip(null));
-  $('#icsBtn').addEventListener('click', exportIcs);
+  $('#icsBtn').addEventListener('click', () => exportIcs(false));
+  $('#icsTravelBtn').addEventListener('click', () => exportIcs(true));
   $('#exportBtn').addEventListener('click', exportAll);
   $('#importBtn').addEventListener('click', () => $('#importInput').click());
   $('#importInput').addEventListener('change', e => importFile(e.target.files[0]));
@@ -722,12 +729,22 @@ async function exportAll() {
   );
 }
 
-async function exportIcs() {
+// travelOnly drops the meals and loose activities, which is usually what you
+// want in a shared calendar you actually look at.
+async function exportIcs(travelOnly = false) {
   const t = trip();
   if (!t) { toast('No trip selected'); return; }
-  if (!state.items.some(it => it.start)) { toast('Nothing has a date yet'); return; }
+
+  const items = travelOnly
+    ? state.items.filter(it => it.type === 'transport' || it.type === 'stay')
+    : state.items;
+
+  if (!items.some(it => it.start)) { toast('Nothing has a date yet'); return; }
+
   const slug = (t.name || 'trip').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'trip';
-  await shareOrDownload(new Blob([buildIcs(t, state.items)], { type: 'text/calendar' }), `${slug}.ics`, t.name);
+  const name = travelOnly ? `${slug}-travel.ics` : `${slug}.ics`;
+  const cal = { ...t, name: travelOnly ? `${t.name} (travel)` : t.name };
+  await shareOrDownload(new Blob([buildIcs(cal, items)], { type: 'text/calendar' }), name, cal.name);
 }
 
 // The share sheet is the useful path on iOS: it reaches Calendar, Files and

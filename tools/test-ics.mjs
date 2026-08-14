@@ -59,7 +59,11 @@ test('folding counts UTF-8 bytes, not characters', () => {
 
 test('commas and semicolons in free text are escaped', () => {
   const out = buildIcs(trip, [mk({ id: 'x', title: 'Hire car, small; manual', start: '2026-10-12T09:00' })]);
-  assert.ok(out.includes('SUMMARY:🚗 Hire car\\, small\\; manual') || out.includes('Hire car\\, small\\; manual'));
+  assert.ok(out.includes('SUMMARY:Hire car\\, small\\; manual'));
+});
+
+test('summaries carry no emoji', () => {
+  assert.ok(!/SUMMARY:[^\r\n]*[\u{1F300}-\u{1FAFF}\u{2700}-\u{27BF}\u{2600}-\u{26FF}]/u.test(ics));
 });
 
 test('newlines in notes become \\n, not real line breaks', () => {
@@ -73,12 +77,43 @@ test('times are floating local, so they read the same in any timezone', () => {
   assert.ok(!/DTSTART:\d{8}T\d{6}Z/.test(ics), 'should not be UTC-stamped');
 });
 
-test('a flight carries a leave-by alarm at its lead time', () => {
+test('a flight carries a leave-by alarm plus a day-before warning', () => {
   const block = ics.slice(ics.indexOf('UID:f1@'), ics.indexOf('END:VEVENT', ics.indexOf('UID:f1@')));
   assert.ok(block.includes('TRIGGER:-PT150M'), 'expected the 150 min flight lead');
-  assert.ok(block.includes('TRIGGER:-PT0M'), 'expected a departure-time alarm too');
+  assert.ok(block.includes('TRIGGER:-P1D'), 'expected a day-before warning on flights');
   assert.ok(block.includes('LOCATION:Gatwick'));
   assert.ok(block.includes('XK9P2T'));
+});
+
+test('nothing gets a second alarm at the departure itself', () => {
+  assert.ok(!ics.includes('TRIGGER:-PT0M\r\nDESCRIPTION:BA2551'),
+    'a duplicate buzz at departure only teaches you to ignore both');
+});
+
+test('non-flights get one alarm only', () => {
+  const bus = mk({ id: 'b1', mode: 'bus', title: 'Coach', start: '2026-10-14T08:00' });
+  const out = buildIcs(trip, [bus]);
+  const block = out.slice(out.indexOf('UID:b1@'), out.indexOf('END:VEVENT', out.indexOf('UID:b1@')));
+  assert.equal((block.match(/BEGIN:VALARM/g) || []).length, 1);
+  assert.ok(block.includes('TRIGGER:-PT20M'));
+});
+
+test('a date with no time becomes an all-day event nudged at 09:00', () => {
+  const out = buildIcs(trip, [mk({ id: 'd1', type: 'activity', title: 'Free day', start: '2026-10-15' })]);
+  assert.ok(out.includes('DTSTART;VALUE=DATE:20261015'), 'expected an all-day start');
+  assert.ok(out.includes('DTEND;VALUE=DATE:20261016'), 'all-day end is the next date');
+  assert.ok(out.includes('TRIGGER:PT9H'), 'expected a 09:00 nudge, not midnight');
+  assert.ok(!/DTSTART:20261015T000000/.test(out), 'must not be buried at midnight');
+});
+
+test('what to bring leads the description', () => {
+  const out = buildIcs(trip, [mk({ id: 'p1', title: 'Dive', start: '2026-10-15T08:00', docs: 'PADI card, passport' })]);
+  assert.ok(/DESCRIPTION:Bring: PADI card\\, passport/.test(out));
+});
+
+test('arrival time is carried into the description', () => {
+  const block = ics.slice(ics.indexOf('UID:f1@'), ics.indexOf('END:VEVENT', ics.indexOf('UID:f1@')));
+  assert.ok(block.includes('Arrives 00:05'), 'expected the landing time');
 });
 
 test('a stay splits into check in and check out, not one long block', () => {
@@ -94,7 +129,7 @@ test('pay-on-arrival cash shows in the event description', () => {
 });
 
 test('a cash reminder lands the evening before the first cash day', () => {
-  assert.ok(/SUMMARY:💵 Draw out/.test(ics));
+  assert.ok(/SUMMARY:Draw out/.test(ics));
   assert.ok(ics.includes('DTSTART:20261012T180000'), 'expected 18:00 the day before 13 Oct');
 });
 
