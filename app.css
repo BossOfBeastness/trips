@@ -431,14 +431,19 @@ main {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Cost sits in the margin, pencilled beside the entry rather than boxed in. */
 .cost {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   flex: none;
   align-self: center;
-  font-family: var(--hand);
-  font-size: 15px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
   color: var(--ink-2);
+  white-space: nowrap;
 }
+/* Owed in cash is the one you can still get caught out by, so it carries the
+   wallet and the warm colour. Anything already paid just states its price. */
 .cost.owed { color: var(--fruit); }
 .stop.done .cost { color: var(--ink-3); }
 

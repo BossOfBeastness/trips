@@ -293,10 +293,13 @@ function stopRow(it, now, q) {
   const owes = !it.settledAt && PAY_STATUS[it.payStatus]?.needsMoney
     && (it.payMethod === 'cash' || it.payMethod === 'either');
 
-  // Cost sits in the margin like a note pencilled beside the entry.
-  const cost = it.amount
-    ? `<span class="cost ${owes ? 'owed' : ''}">${esc(fmtMoney(it.amount, it.currency))}</span>`
-    : (owes ? `<span class="cost owed">cash</span>` : '');
+  // Wallet icon means cash still to hand over, so the thing you can forget is
+  // marked rather than just priced.
+  const cost = (it.amount || owes)
+    ? `<span class="cost ${owes ? 'owed' : ''}">`
+      + (owes ? icon('wallet', { size: 15 }) : '')
+      + `<span>${esc(it.amount ? fmtMoney(it.amount, it.currency) : 'cash')}</span></span>`
+    : '';
 
   return `
     <button class="stop ${done ? 'done' : ''} ${isNext ? 'now' : ''}" data-open="${esc(it.id)}">
