@@ -70,8 +70,13 @@ export function bedGaps(trip, items) {
   return out;
 }
 
+// Only a stay or a journey says where you are. An activity is something you do,
+// and it is usually reachable on foot — trekking out of Cusco and back should
+// not read as two missing bookings.
+const anchors = it => it.type === 'transport' || it.type === 'stay';
+
 export function transitGaps(items) {
-  const dated = sortItems(items).filter(i => i.start && (endsAt(i) || startsAt(i)));
+  const dated = sortItems(items).filter(i => i.start && anchors(i) && (endsAt(i) || startsAt(i)));
   const byDay = new Map();
   for (const it of dated) {
     const k = dayKey(parseLocal(it.start));

@@ -1276,7 +1276,7 @@ function init() {
 // Bumped with the service worker cache. Shown in Settings so there is a way to
 // tell what a phone is actually running — an installed PWA will happily keep
 // serving a months-old build with no outward sign.
-export const APP_VERSION = 'v11';
+export const APP_VERSION = 'v12';
 
 let swReg = null;
 let reloading = false;

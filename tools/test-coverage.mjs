@@ -47,7 +47,7 @@ test('a day-time flight does not cover the night', () => {
 
 test('ending somewhere different with no transport is a transit gap', () => {
   const gaps = transitGaps([
-    mk({ id: 'a', type: 'activity', title: 'Dive', to: 'Santa Catalina', start: '2026-09-13T09:00' }),
+    mk({ id: 'a', type: 'stay', title: 'Hostel', to: 'Santa Catalina', start: '2026-09-13T09:00' }),
     mk({ id: 'b', title: 'Fly home', from: 'Panama City', to: 'London', start: '2026-09-14T06:00' }),
   ]);
   assert.equal(gaps.length, 1);
@@ -55,9 +55,20 @@ test('ending somewhere different with no transport is a transit gap', () => {
   assert.equal(gaps[0].date, '2026-09-14');
 });
 
+test('walking to an activity and back is not a missing booking', () => {
+  // Trekking out of Cusco and returning read as two gaps until activities
+  // stopped counting as evidence of where you are.
+  const gaps = transitGaps([
+    mk({ id: 'a', type: 'activity', to: 'Cusco', start: '2026-09-13T05:00' }),
+    mk({ id: 'b', type: 'activity', to: 'Inca Trail', start: '2026-09-14T06:00' }),
+    mk({ id: 'c', type: 'activity', to: 'Cusco', start: '2026-09-16T04:00' }),
+  ]);
+  assert.equal(gaps.length, 0);
+});
+
 test('booking the bus closes the transit gap', () => {
   const gaps = transitGaps([
-    mk({ id: 'a', type: 'activity', to: 'Santa Catalina', start: '2026-09-13T09:00' }),
+    mk({ id: 'a', type: 'stay', to: 'Santa Catalina', start: '2026-09-13T09:00' }),
     mk({ id: 'x', mode: 'bus', from: 'Santa Catalina', to: 'Panama City', start: '2026-09-13T15:00' }),
     mk({ id: 'b', from: 'Panama City', to: 'London', start: '2026-09-14T06:00' }),
   ]);
@@ -66,8 +77,8 @@ test('booking the bus closes the transit gap', () => {
 
 test('staying put is not a gap', () => {
   const gaps = transitGaps([
-    mk({ id: 'a', type: 'activity', to: 'Cusco', start: '2026-09-13T09:00' }),
-    mk({ id: 'b', type: 'food', to: 'Cusco', start: '2026-09-14T20:00' }),
+    mk({ id: 'a', type: 'stay', to: 'Cusco', start: '2026-09-13T09:00' }),
+    mk({ id: 'b', type: 'stay', to: 'Cusco', start: '2026-09-14T20:00' }),
   ]);
   assert.equal(gaps.length, 0);
 });
