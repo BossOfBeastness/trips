@@ -1026,6 +1026,16 @@ function openSettings() {
       <p class="hint" id="quota"></p>
     </div>
 
+    <p class="sheet-section">Version</p>
+    <div class="panel">
+      <p class="hint">This copy is <strong>${esc(APP_VERSION)}</strong>.</p>
+      <button type="button" class="btn" id="updateBtn">Check for an update</button>
+      <p class="hint" id="updateStatus"></p>
+      <p class="hint">An installed app can keep running an old build after the new one has
+        downloaded. If something described here is missing, force-quit it from the app
+        switcher and open it again.</p>
+    </div>
+
     <p class="sheet-section">Keeping it installed</p>
     <div class="panel">
       <p class="hint">Open in Safari, then Share and <strong>Add to Home Screen</strong>. Launch it from
@@ -1047,6 +1057,10 @@ function openSettings() {
   body.querySelectorAll('[data-edit-trip]').forEach(el => el.addEventListener('click', () =>
     editTrip(state.trips.find(x => x.id === el.dataset.editTrip))));
   $('#newTrip').addEventListener('click', () => editTrip(null));
+  $('#updateBtn').addEventListener('click', async () => {
+    $('#updateStatus').textContent = 'Checking…';
+    $('#updateStatus').textContent = await checkForUpdate();
+  });
   $('#importBookingBtn').addEventListener('click', openImport);
   $('#ratesBtn').addEventListener('click', editRates);
   $('#icsBtn').addEventListener('click', () => exportIcs(false));
@@ -1253,11 +1267,47 @@ function init() {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
 }
 
+// Bumped with the service worker cache. Shown in Settings so there is a way to
+// tell what a phone is actually running — an installed PWA will happily keep
+// serving a months-old build with no outward sign.
+export const APP_VERSION = 'v9';
+
+let swReg = null;
+let reloading = false;
+
+async function registerWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    swReg = await navigator.serviceWorker.register('sw.js');
+
+    // A new worker taking control means the code on this page is stale. Reload
+    // once, immediately, rather than leaving the old version running.
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading) return;
+      reloading = true;
+      location.reload();
+    });
+
+    swReg.update().catch(() => {});
+  } catch { /* offline, or blocked — the app still works from cache */ }
+}
+
+export async function checkForUpdate() {
+  if (!swReg) return 'This copy is not running a cached build.';
+  try {
+    await swReg.update();
+    if (swReg.installing || swReg.waiting) return 'Update found — reloading.';
+    return `Up to date (${APP_VERSION}).`;
+  } catch {
+    return 'Could not check — no connection.';
+  }
+}
+
 (async function main() {
   init();
   await load();
   if (!location.hash) location.hash = '#/now';
   render();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  registerWorker();
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
 })();
