@@ -731,8 +731,12 @@ function editItem(existing, { isNew: forceNew = false } = {}) {
       <div data-only="transport" style="flex:1">
         ${field('From', 'from', it.from, { placeholder: 'Gatwick' })}
       </div>
-      ${field('To', 'to', it.to, { placeholder: 'Cusco' })}
+      <div data-tofield style="flex:1">
+        ${field('To', 'to', it.to, { placeholder: 'Cusco' })}
+      </div>
     </div>
+    <p class="hint" data-tohint hidden>The town, not the address — it is how the app works out
+      whether you have booked a way between places.</p>
 
     <p class="sheet-section">Starts</p>
     ${whenPicker('start', datePart(it.start), timePart(it.start))}
@@ -833,15 +837,24 @@ function editItem(existing, { isNew: forceNew = false } = {}) {
     refreshFiles();
   });
 
-  // "From" only means something when you are moving. Hide it otherwise.
   wireWhen($('#sheetBody'));
 
+  // "From" only means something when you are moving, and "To" means nothing at
+  // all for a hotel — you are not going anywhere, you are staying somewhere.
   const kindSel = formEl().querySelector('[name=kind]');
   const syncKind = () => {
     const type = KINDS[kindSel.value]?.type;
-    $('#sheetBody').querySelectorAll('[data-only]').forEach(el => {
+    const moving = type === 'transport';
+    const body = $('#sheetBody');
+
+    body.querySelectorAll('[data-only]').forEach(el => {
       el.style.display = el.dataset.only === type ? '' : 'none';
     });
+
+    const toBox = body.querySelector('[data-tofield]');
+    toBox.querySelector('span').textContent = moving ? 'To' : 'Where';
+    toBox.querySelector('input').placeholder = moving ? 'Cusco' : 'Town or city';
+    body.querySelector('[data-tohint]').hidden = moving;
   };
   kindSel.addEventListener('change', syncKind);
   syncKind();
@@ -1276,7 +1289,7 @@ function init() {
 // Bumped with the service worker cache. Shown in Settings so there is a way to
 // tell what a phone is actually running — an installed PWA will happily keep
 // serving a months-old build with no outward sign.
-export const APP_VERSION = 'v12';
+export const APP_VERSION = 'v13';
 
 let swReg = null;
 let reloading = false;
