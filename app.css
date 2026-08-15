@@ -310,11 +310,20 @@ main {
 
 /* One continuous hairline runs the length of the trip; every stop hangs off it.
    The itinerary really is a sequence, so the spine carries information. */
-.trail { position: relative; padding-left: 44px; }
+/* Everything that sits on the spine is positioned from these two numbers and
+   centred with a transform, so nothing can drift out of line when the padding
+   changes. Hard-coded offsets are what broke this twice. */
+.trail {
+  --trail-pad: 44px;
+  --spine: 14px;
+  --on-spine: calc(var(--spine) - var(--trail-pad));
+  position: relative;
+  padding-left: var(--trail-pad);
+}
 .trail::before {
   content: '';
   position: absolute;
-  left: 13px;
+  left: var(--spine);
   top: 6px;
   bottom: 6px;
   width: 1px;
@@ -331,7 +340,8 @@ main {
 }
 .gap .dash {
   position: relative;
-  left: -35px;
+  left: var(--on-spine);
+  transform: translateX(-50%);
   width: 9px;
   height: 1px;
   background: var(--pale);
@@ -361,8 +371,9 @@ main {
 .day-label::before {
   content: '';
   position: absolute;
-  left: -26px;
-  top: 5px;
+  left: var(--on-spine);
+  transform: translateX(-50%);
+  top: 6px;
   width: 9px; height: 1px;
   background: var(--line);
 }
@@ -386,9 +397,10 @@ main {
    flight, bus, bed, dive without reading a word. */
 .node {
   position: absolute;
-  left: -35px;
-  top: 10px;
-  width: 26px; height: 26px;
+  left: var(--on-spine);
+  transform: translateX(-50%);
+  top: 9px;
+  width: 28px; height: 28px;
   display: grid;
   place-items: center;
   border-radius: 50%;
@@ -511,9 +523,9 @@ main {
 .hole { position: relative; display: flex; align-items: center; gap: 10px; margin: 8px 0; }
 .hole-node {
   position: absolute;
-  left: -43.5px; top: 50%;
-  transform: translateY(-50%);
-  width: 27px; height: 27px;
+  left: var(--on-spine); top: 50%;
+  transform: translate(-50%, -50%);
+  width: 28px; height: 28px;
   border-radius: 50%;
   border: 1px dashed var(--fruit);
   background: var(--paper);
@@ -577,27 +589,33 @@ main {
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
 }
+/* One size for every tappable block in the picker: 62 wide, 74 tall, comfortably
+   past Apple's 44pt floor and identical whether it is a day or a time. */
 .dayb {
   flex: 0 0 auto;
-  width: 52px;
-  padding: 8px 0 9px;
+  width: 62px;
+  height: 74px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0;
   border: 1px solid var(--line);
-  border-radius: 11px;
+  border-radius: 12px;
   background: var(--card);
   color: var(--ink);
-  text-align: center;
   scroll-snap-align: center;
 }
-.dayb .dow { display: block; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
-.dayb .num { display: block; font-family: var(--display); font-size: 20px; line-height: 1.2; }
-.dayb .mon { display: block; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+.dayb .dow { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.dayb .num { font-family: var(--display); font-size: 22px; line-height: 1.1; }
+.dayb .mon { font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
 .dayb.busy::after {
   content: '';
-  display: block;
   width: 4px; height: 4px;
   border-radius: 50%;
   background: var(--pale);
-  margin: 4px auto 0;
+  margin-top: 3px;
 }
 .dayb.on { background: var(--moss); border-color: var(--moss); color: var(--paper); }
 .dayb.on .dow, .dayb.on .mon { color: color-mix(in srgb, var(--paper) 72%, var(--moss)); }
@@ -605,9 +623,13 @@ main {
 
 .chiprow { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 8px; }
 .chip {
-  padding: 9px 13px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 15px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--card);
   color: var(--ink);
   font-size: 14px;

@@ -11,9 +11,26 @@ export function addDays(d, n) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 }
 
-export function eachNight(trip) {
-  const start = parseLocal(trip.start);
-  const end = parseLocal(trip.end);
+// A trip often has no dates on it — you add the flights first and fill the trip
+// in later. Falling back to the span of what is booked means the checks work
+// from the first item rather than staying silent until the trip is dated.
+export function tripRange(trip, items = []) {
+  let start = parseLocal(trip?.start);
+  let end = parseLocal(trip?.end);
+  if (start && end) return { start, end };
+
+  const dates = items.map(i => parseLocal(i.start)).filter(Boolean).sort((a, b) => a - b);
+  const ends = items.map(i => parseLocal(i.end)).filter(Boolean).sort((a, b) => a - b);
+  if (!dates.length) return { start: null, end: null };
+
+  const last = [...dates, ...ends].sort((a, b) => a - b).pop();
+  start = start || new Date(dates[0].getFullYear(), dates[0].getMonth(), dates[0].getDate());
+  end = end || new Date(last.getFullYear(), last.getMonth(), last.getDate());
+  return { start, end };
+}
+
+export function eachNight(trip, items = []) {
+  const { start, end } = tripRange(trip, items);
   if (!start || !end) return [];
   const out = [];
   // A night is named for the day it begins. The last day of a trip has no night:
@@ -44,7 +61,7 @@ export function bedGaps(trip, items) {
   const stays = items.filter(i => i.type === 'stay');
   const moving = items.filter(i => i.type === 'transport');
   const out = [];
-  for (const night of eachNight(trip)) {
+  for (const night of eachNight(trip, items)) {
     if (stays.some(s => spansNight(s, night))) continue;
     // An overnight bus or flight is a bed, of a sort. Not a gap.
     if (moving.some(m => spansNight(m, night))) continue;
@@ -101,8 +118,7 @@ export function coverageGaps(trip, items, dismissed = []) {
 // One row per day for the ribbon: is there a bed, is there movement, and is
 // either of them missing.
 export function coverageByDay(trip, items, dismissed = []) {
-  const start = parseLocal(trip?.start);
-  const end = parseLocal(trip?.end);
+  const { start, end } = tripRange(trip, items);
   if (!start || !end) return [];
 
   const gaps = coverageGaps(trip, items, dismissed);

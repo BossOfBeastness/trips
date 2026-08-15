@@ -608,7 +608,7 @@ function whenPicker(name, dateValue, timeValue) {
 
       <input type="time" class="loose" data-timefield hidden value="${esc(timeValue)}">
       <button type="button" class="chip ghost wide ${outside ? 'on' : ''}" data-otherdate>
-        ${outside ? esc(dateValue) + ' — another date' : 'Another date'}
+        <span data-datelabel>${dateValue ? esc(fmtDayLong(parseLocal(dateValue))) : 'No date yet'}</span>
       </button>
       <input type="date" class="loose" data-datefield ${outside ? '' : 'hidden'} value="${esc(dateValue)}">
     </div>`;
@@ -623,12 +623,16 @@ function wireWhen(root) {
     const timeField = box.querySelector('[data-timefield]');
     const dateField = box.querySelector('[data-datefield]');
 
+    const label = box.querySelector('[data-datelabel]');
     const paint = () => {
       box.querySelectorAll('.dayb').forEach(b =>
         b.classList.toggle('on', b.dataset.date === dateInput.value));
       box.querySelectorAll('[data-time]').forEach(b =>
         b.classList.toggle('on', b.dataset.time === timeInput.value));
       box.querySelector('[data-notime]').classList.toggle('on', !!dateInput.value && !timeInput.value);
+      label.textContent = dateInput.value
+        ? fmtDayLong(parseLocal(dateInput.value))
+        : 'No date yet';
     };
 
     box.querySelectorAll('.dayb').forEach(b => b.addEventListener('click', () => {
