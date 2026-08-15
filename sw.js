@@ -1,6 +1,6 @@
 // Cache-first app shell. Once installed, the app opens with no signal at all.
 // Bump CACHE when shipping changes, otherwise phones keep the old copy forever.
-const CACHE = 'trips-v10';
+const CACHE = 'trips-v11';
 const VENDOR = 'trips-vendor-v1';
 
 const SHELL = [
@@ -65,6 +65,23 @@ self.addEventListener('fetch', (e) => {
   }
 
   if (url.origin !== self.location.origin) return;
+
+  // The page itself is fetched network-first. Serving stale HTML cache-first is
+  // what let an installed app sit on an old build forever: it never navigates,
+  // so nothing ever prompted a check. Falls back to cache the moment there is
+  // no signal, so this costs nothing offline.
+  if (req.mode === 'navigate' || (req.destination === 'document')) {
+    e.respondWith(
+      fetch(req)
+        .then(res => {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(req, copy));
+          return res;
+        })
+        .catch(() => caches.match(req).then(hit => hit || caches.match('./index.html')))
+    );
+    return;
+  }
 
   e.respondWith(
     caches.match(req).then(hit => {

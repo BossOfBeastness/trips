@@ -1264,13 +1264,19 @@ function init() {
 
   // Keep the countdown honest without redrawing screens you are reading.
   setInterval(() => { if ((location.hash || '#/now') === '#/now') render(); }, 30000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
+  // Coming back to the app is the closest thing to a relaunch that an installed
+  // PWA reliably gives us, so it is where we look for a new build.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    render();
+    swReg?.update().catch(() => {});
+  });
 }
 
 // Bumped with the service worker cache. Shown in Settings so there is a way to
 // tell what a phone is actually running — an installed PWA will happily keep
 // serving a months-old build with no outward sign.
-export const APP_VERSION = 'v10';
+export const APP_VERSION = 'v11';
 
 let swReg = null;
 let reloading = false;
