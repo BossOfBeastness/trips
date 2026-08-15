@@ -3,10 +3,13 @@ import {
   TRANSPORT_MODES, ITEM_TYPES, PAY_STATUS, PAY_METHOD, KINDS,
   kindOf, applyKind, blankItem, leadFor, parseLocal, leaveByDate, groupByDay, sortItems,
   nextUp, cashPlan, fmtMoney, fmtTime, fmtDayLong, fmtDayShort, fmtDayNum, fmtWeekday,
-  relative, dayDiff, hasTime, datePart, timePart, joinWhen,
+  relative, dayDiff, hasTime, datePart, timePart, joinWhen, dayKey, tripTotals,
 } from './model.js';
 import { buildIcs } from './ics.js';
 import { icon, ICON_FOR_KIND } from './icons.js';
+import { coverageGaps, coverageByDay, addDays } from './coverage.js';
+import { importFileToFields } from './importers.js';
+import { parseBooking } from './parse.js';
 
 const state = {
   trips: [],
@@ -14,6 +17,9 @@ const state = {
   items: [],
   files: [],
   query: '',
+  rates: {},
+  lastKind: null,     // what you added last — the next one is usually the same
+  focusDate: null,    // the day you were looking at when you tapped add
 };
 
 const $ = sel => document.querySelector(sel);
@@ -46,6 +52,8 @@ async function load() {
   }
   state.items = state.tripId ? await db.byIndex('items', 'tripId', state.tripId) : [];
   state.files = await db.all('files');
+  state.rates = await db.metaGet('rates', {});
+  state.lastKind = await db.metaGet('lastKind', null);
 }
 
 const trip = () => state.trips.find(t => t.id === state.tripId) || null;
@@ -135,6 +143,20 @@ function viewNow() {
         <span class="after-time">${esc(fmtTime(s))}</span>
         <span class="after-title">${esc(after.title || 'Untitled')}</span>
       </button>`;
+  }
+
+  const open = gaps();
+  if (open.length) {
+    const beds = open.filter(g => g.kind === 'bed').length;
+    const moves = open.length - beds;
+    const parts = [];
+    if (beds) parts.push(`${beds} night${beds === 1 ? '' : 's'} with nowhere booked`);
+    if (moves) parts.push(`${moves} journey${moves === 1 ? '' : 's'} with no way there`);
+    html += `
+      <a class="note gap-note-line" href="#/plan">
+        <span class="note-count">${open.length}</span>
+        <span>${esc(parts.join(' · '))}</span>
+      </a>`;
   }
 
   const soon = cashPlan(state.items).filter(c => c.firstNeeded && dayDiff(c.firstNeeded, now) <= 2);
@@ -233,9 +255,25 @@ function viewPlan() {
       : `<div class="empty"><div class="bloom"></div><h2>Nothing planned</h2>
          <p>Add the first flight or booking with the plus button.</p></div>`;
   } else {
+    if (!q) html += ribbon();
+
+    const gapsByDate = new Map();
+    if (!q) for (const g of gaps()) {
+      if (!gapsByDate.has(g.date)) gapsByDate.set(g.date, []);
+      gapsByDate.get(g.date).push(g);
+    }
+
+    // Days with items and days with only a gap are merged into one ordered
+    // sequence, so a hole appears where it falls rather than at the bottom.
+    const grouped = groupByDay(shown);
+    const dated = [...grouped.keys()].filter(k => k !== 'unscheduled');
+    const keys = [...new Set([...dated, ...gapsByDate.keys()])].sort();
+    if (grouped.has('unscheduled')) keys.push('unscheduled');
+
     html += `<div class="trail">`;
     let prevDay = null;
-    for (const [key, items] of groupByDay(shown)) {
+    for (const key of keys) {
+      const items = grouped.get(key) || [];
       const d = key === 'unscheduled' ? null : parseLocal(key);
 
       // One dash per empty day, so a week sat in one place looks like a week
@@ -251,14 +289,21 @@ function viewPlan() {
       if (d) prevDay = d;
 
       const today = d && dayDiff(d, now) === 0;
-      html += `<h2 class="day-label ${today ? 'today' : ''}">${d ? esc(fmtDayLong(d)) : 'No date yet'}</h2>`;
+      html += `<h2 class="day-label ${today ? 'today' : ''}" ${today ? 'id="todayMark"' : ''}>${d ? esc(fmtDayLong(d)) : 'No date yet'}</h2>`;
       html += items.map(it => stopRow(it, now, q)).join('');
+      for (const g of gapsByDate.get(key) || []) html += gapMarker(g);
     }
     html += `</div>`;
   }
 
   view.innerHTML = html;
   wire();
+
+  // Once the trip is under way, open Plan where you actually are.
+  if (!q && !viewPlan._jumped) {
+    const mark = $('#todayMark');
+    if (mark) { mark.scrollIntoView({ block: 'start' }); viewPlan._jumped = true; }
+  }
 
   const input = $('#q');
   input.addEventListener('input', () => {
@@ -271,46 +316,98 @@ function viewPlan() {
   });
 }
 
+/* -------------------------------------------------------------- gaps --- */
+
+const dismissed = () => trip()?.dismissed || [];
+const gaps = () => coverageGaps(trip(), state.items, dismissed());
+
+function ribbon() {
+  const rows = coverageByDay(trip(), state.items, dismissed());
+  if (!rows.length) return '';
+  return `
+    <div class="ribbon" aria-label="What is booked, day by day">
+      ${rows.map(r => `
+        <div class="rday">
+          <div class="rnum">${r.day}</div>
+          <div class="rbar ${r.transitMissing ? 'miss' : (r.moves ? 'move' : '')}"></div>
+          <div class="rbar ${r.lastNight ? 'none' : (r.bedMissing ? 'miss' : (r.bed ? 'bed' : ''))}"></div>
+        </div>`).join('')}
+    </div>
+    <p class="ribbon-key">Travel above, somewhere to sleep below. <span class="miss-key">Dashed means nothing booked.</span></p>`;
+}
+
+function gapMarker(g) {
+  const d = parseLocal(g.date);
+  const text = g.kind === 'bed'
+    ? `<b>No bed for ${esc(fmtWeekday(d))} night.</b>`
+    : `<b>Nothing booked to ${esc(g.to || 'the next place')}.</b><span class="gap-why">You end ${esc(fmtWeekday(addDays(d, -1)))} in ${esc(g.from || 'another place')}.</span>`;
+  return `
+    <div class="hole">
+      <span class="hole-node">?</span>
+      <button class="hole-body" data-fix="${esc(g.date)}" data-kind="${esc(g.kind)}">${text}</button>
+      <button class="hole-skip" data-dismiss="${esc(g.id)}" aria-label="Ignore this">Ignore</button>
+    </div>`;
+}
+
+async function dismissGap(id) {
+  const t = trip();
+  t.dismissed = [...(t.dismissed || []), id];
+  await db.put('trips', t);
+  await load();
+  render();
+}
+
 function stopRow(it, now, q) {
   const start = parseLocal(it.start);
   const done = start && start < now;
   const isNext = nextUp(state.items, now)?.id === it.id;
 
   const end = parseLocal(it.end);
-  // Arrival matters as much as departure when you are the one travelling.
-  const arrive = end && hasTime(it.end) ? `arr ${fmtTime(end)}` : '';
 
   let sub = '';
   if (q && it.ref) sub = `<span class="stop-sub ref selectable">${esc(it.ref)}</span>`;
   else {
-    const bits = [
-      (it.from || it.to) ? [it.from, it.to].filter(Boolean).join(' to ') : it.provider,
-      arrive,
-    ].filter(Boolean);
-    if (bits.length) sub = `<span class="stop-sub">${esc(bits.join(' · '))}</span>`;
+    const place = (it.from || it.to) ? [it.from, it.to].filter(Boolean).join(' to ') : it.provider;
+    if (place) sub = `<span class="stop-sub">${esc(place)}</span>`;
   }
 
   const owes = !it.settledAt && PAY_STATUS[it.payStatus]?.needsMoney
     && (it.payMethod === 'cash' || it.payMethod === 'either');
 
-  // Wallet icon means cash still to hand over, so the thing you can forget is
-  // marked rather than just priced.
   const cost = (it.amount || owes)
-    ? `<span class="cost ${owes ? 'owed' : ''}">`
-      + (owes ? icon('wallet', { size: 15 }) : '')
-      + `<span>${esc(it.amount ? fmtMoney(it.amount, it.currency) : 'cash')}</span></span>`
+    ? `<span class="cost">
+         <span class="cost-amt ${owes ? 'owed' : ''}">${esc(it.amount ? fmtMoney(it.amount, it.currency) : 'cash')}</span>
+         ${owes ? '<span class="cost-tag">cash owed</span>' : ''}
+       </span>`
     : '';
 
+  // Departure over arrival, joined by a hairline. The +N is the important part:
+  // without it, a flight landing 11:00 the next day reads as arriving early.
+  let times;
+  if (!start) {
+    times = `<span class="dep">—</span>`;
+  } else if (end && hasTime(it.end) && hasTime(it.start)) {
+    const offset = dayDiff(end, start);
+    times = `<span class="dep">${esc(fmtTime(start))}</span>`
+      + `<span class="conn"></span>`
+      + `<span class="arr">${esc(fmtTime(end))}${offset > 0 ? `<span class="plus">+${offset}</span>` : ''}</span>`;
+  } else {
+    times = `<span class="dep">${esc(hasTime(it.start) ? fmtTime(start) : 'all day')}</span>`;
+  }
+
   return `
-    <button class="stop ${done ? 'done' : ''} ${isNext ? 'now' : ''}" data-open="${esc(it.id)}">
-      <span class="node">${icon(iconFor(it), { size: 15 })}</span>
-      <span class="stop-time">${start ? esc(hasTime(it.start) ? fmtTime(start) : 'all day') : '—'}</span>
-      <span class="stop-body">
-        <span class="stop-title">${esc(it.title || 'Untitled')}</span>
-        ${sub}
-      </span>
-      ${cost}
-    </button>`;
+    <div class="stop-wrap">
+      <button class="stop ${done ? 'done' : ''} ${isNext ? 'now' : ''}" data-open="${esc(it.id)}" data-id="${esc(it.id)}">
+        <span class="node">${icon(iconFor(it), { size: 15 })}</span>
+        <span class="stop-time">${times}</span>
+        <span class="stop-body">
+          <span class="stop-title">${esc(it.title || 'Untitled')}</span>
+          ${sub}
+        </span>
+        ${cost}
+      </button>
+      ${owes ? `<button class="swipe-act" data-pay="${esc(it.id)}">Mark paid</button>` : ''}
+    </div>`;
 }
 
 /* ------------------------------------------------------------ view: cash --- */
@@ -329,7 +426,26 @@ function viewCash() {
     return;
   }
 
+  const totals = tripTotals(state.items, state.rates);
   let html = '';
+
+  if (totals.total || totals.unconverted.length) {
+    html += `
+      <section class="totals">
+        <p class="eyebrow">What the trip costs</p>
+        <div class="totals-sum">${esc(fmtMoney(totals.total, totals.base))}</div>
+        <p class="totals-split">
+          ${esc(fmtMoney(totals.paid, totals.base))} paid
+          ${totals.owed ? ` · <span class="owed">${esc(fmtMoney(totals.owed, totals.base))} still owed</span>` : ''}
+        </p>
+        ${totals.unconverted.length ? `
+          <p class="totals-missing">
+            Not counted: ${totals.unconverted.map(u => esc(fmtMoney(u.total, u.currency))).join(', ')}
+            — <button class="linkish" data-rates>set a rate</button>
+          </p>` : ''}
+      </section>`;
+  }
+
   for (const c of plan) {
     html += `
       <section class="purse">
@@ -370,6 +486,8 @@ function viewCash() {
 
   view.innerHTML = html;
   wire();
+
+  view.querySelectorAll('[data-rates]').forEach(el => el.addEventListener('click', editRates));
 
   view.querySelectorAll('[data-settle]').forEach(el => el.addEventListener('change', async () => {
     const it = state.items.find(x => x.id === el.dataset.settle);
@@ -423,6 +541,128 @@ function field(label, name, value, opts = {}) {
   </label>`;
 }
 
+// A new item starts on the day you were looking at, as the kind you added last.
+// Both are nearly always right, and both are one tap to change.
+function newItemDefaults() {
+  const it = blankItem(state.tripId);
+  if (state.lastKind) applyKind(it, state.lastKind);
+  if (state.focusDate) it.start = state.focusDate;
+  return it;
+}
+
+/* ---------------------------------------------------------- when picker --- */
+
+const TIME_CHIPS = ['06:00', '09:00', '12:00', '15:00', '18:00', '21:00'];
+
+// Days a picker offers: the trip, plus two days either side for getting there
+// and back. No trip dates yet means a fortnight from today.
+function pickerDays() {
+  const t = trip();
+  const start = parseLocal(t?.start);
+  const end = parseLocal(t?.end);
+  const from = start ? addDays(start, -2) : new Date();
+  const to = end ? addDays(end, 2) : addDays(new Date(), 14);
+
+  const busy = new Set(state.items.map(i => datePart(i.start)).filter(Boolean));
+  const out = [];
+  for (let d = new Date(from.getFullYear(), from.getMonth(), from.getDate()); d <= to; d = addDays(d, 1)) {
+    const key = dayKey(d);
+    out.push({
+      key,
+      dow: d.toLocaleDateString(undefined, { weekday: 'short' }),
+      num: d.getDate(),
+      mon: d.toLocaleDateString(undefined, { month: 'short' }),
+      busy: busy.has(key),
+    });
+  }
+  return out;
+}
+
+function whenPicker(name, dateValue, timeValue) {
+  const days = pickerDays();
+  const known = days.some(d => d.key === dateValue);
+  const outside = dateValue && !known;
+
+  return `
+    <div class="when" data-when="${name}">
+      <input type="hidden" name="${name}Date" value="${esc(dateValue)}">
+      <input type="hidden" name="${name}Time" value="${esc(timeValue)}">
+
+      <div class="daystrip">
+        ${days.map(d => `
+          <button type="button" class="dayb ${d.key === dateValue ? 'on' : ''} ${d.busy ? 'busy' : ''}"
+                  data-date="${d.key}">
+            <span class="dow">${esc(d.dow)}</span>
+            <span class="num">${d.num}</span>
+            <span class="mon">${esc(d.mon)}</span>
+          </button>`).join('')}
+      </div>
+
+      <div class="chiprow">
+        ${TIME_CHIPS.map(t => `
+          <button type="button" class="chip ${t === timeValue ? 'on' : ''}" data-time="${t}">${t}</button>`).join('')}
+        <button type="button" class="chip ghost" data-typeit>Type it</button>
+        <button type="button" class="chip ghost ${dateValue && !timeValue ? 'on' : ''}" data-notime>No time</button>
+        <button type="button" class="chip ghost" data-clear>Clear</button>
+      </div>
+
+      <input type="time" class="loose" data-timefield hidden value="${esc(timeValue)}">
+      <button type="button" class="chip ghost wide ${outside ? 'on' : ''}" data-otherdate>
+        ${outside ? esc(dateValue) + ' — another date' : 'Another date'}
+      </button>
+      <input type="date" class="loose" data-datefield ${outside ? '' : 'hidden'} value="${esc(dateValue)}">
+    </div>`;
+}
+
+// Wires one picker. Kept separate from the markup so re-rendering a strip after
+// a trip's dates change does not need the whole sheet rebuilt.
+function wireWhen(root) {
+  root.querySelectorAll('[data-when]').forEach(box => {
+    const dateInput = box.querySelector('[name$="Date"]');
+    const timeInput = box.querySelector('[name$="Time"]');
+    const timeField = box.querySelector('[data-timefield]');
+    const dateField = box.querySelector('[data-datefield]');
+
+    const paint = () => {
+      box.querySelectorAll('.dayb').forEach(b =>
+        b.classList.toggle('on', b.dataset.date === dateInput.value));
+      box.querySelectorAll('[data-time]').forEach(b =>
+        b.classList.toggle('on', b.dataset.time === timeInput.value));
+      box.querySelector('[data-notime]').classList.toggle('on', !!dateInput.value && !timeInput.value);
+    };
+
+    box.querySelectorAll('.dayb').forEach(b => b.addEventListener('click', () => {
+      dateInput.value = b.dataset.date === dateInput.value ? '' : b.dataset.date;
+      paint();
+    }));
+    box.querySelectorAll('[data-time]').forEach(b => b.addEventListener('click', () => {
+      timeInput.value = b.dataset.time === timeInput.value ? '' : b.dataset.time;
+      timeField.value = timeInput.value;
+      paint();
+    }));
+    box.querySelector('[data-typeit]').addEventListener('click', () => {
+      timeField.hidden = !timeField.hidden;
+      if (!timeField.hidden) timeField.focus();
+    });
+    timeField.addEventListener('change', () => { timeInput.value = timeField.value; paint(); });
+    box.querySelector('[data-notime]').addEventListener('click', () => {
+      timeInput.value = ''; timeField.value = ''; paint();
+    });
+    box.querySelector('[data-clear]').addEventListener('click', () => {
+      dateInput.value = ''; timeInput.value = ''; timeField.value = ''; paint();
+    });
+    box.querySelector('[data-otherdate]').addEventListener('click', () => {
+      dateField.hidden = !dateField.hidden;
+      if (!dateField.hidden) dateField.focus();
+    });
+    dateField.addEventListener('change', () => { dateInput.value = dateField.value; paint(); });
+
+    // Bring the chosen day into view rather than leaving it scrolled off.
+    const on = box.querySelector('.dayb.on');
+    if (on) on.scrollIntoView({ block: 'nearest', inline: 'center' });
+  });
+}
+
 function select(label, name, value, options) {
   return `<label class="field">
     <span>${esc(label)}</span>
@@ -470,9 +710,10 @@ function editTrip(tr) {
 
 /* ---------------------------------------------------------- edit: item --- */
 
-function editItem(existing) {
-  const it = existing ? { ...existing } : blankItem(state.tripId);
-  const isNew = !existing;
+// `seed` lets a gap marker or an imported file open the sheet already filled in.
+function editItem(existing, { isNew: forceNew = false } = {}) {
+  const it = existing ? { ...existing } : newItemDefaults();
+  const isNew = forceNew || !existing;
   const pendingFiles = [];
 
   // Separate date and time boxes rather than one datetime-local. The native
@@ -489,15 +730,11 @@ function editItem(existing) {
       ${field('To', 'to', it.to, { placeholder: 'Cusco' })}
     </div>
 
-    <p class="sheet-section">When</p>
-    <div class="field-pair">
-      ${field('Date', 'startDate', datePart(it.start), { type: 'date' })}
-      ${field('Time', 'startTime', timePart(it.start), { type: 'time' })}
-    </div>
-    <div class="field-pair">
-      ${field('Arrives / ends', 'endDate', datePart(it.end), { type: 'date' })}
-      ${field('Time', 'endTime', timePart(it.end), { type: 'time' })}
-    </div>
+    <p class="sheet-section">Starts</p>
+    ${whenPicker('start', datePart(it.start), timePart(it.start))}
+
+    <p class="sheet-section">Arrives or ends</p>
+    ${whenPicker('end', datePart(it.end), timePart(it.end))}
 
     ${field('Bring', 'docs', it.docs, { placeholder: 'Passport, driving licence, PADI card' })}
 
@@ -551,6 +788,8 @@ function editItem(existing) {
     }, f.get('kind'));
     if (!next.title && !next.ref) { toast('Give it a name'); return; }
     if (!next.id) next.id = uid();
+    state.lastKind = f.get('kind');
+    await db.metaSet('lastKind', state.lastKind);
     for (const pending of pendingFiles) await db.put('files', { ...pending, itemId: next.id });
     closeSheet();
     await saveItem(next);
@@ -591,6 +830,8 @@ function editItem(existing) {
   });
 
   // "From" only means something when you are moving. Hide it otherwise.
+  wireWhen($('#sheetBody'));
+
   const kindSel = formEl().querySelector('[name=kind]');
   const syncKind = () => {
     const type = KINDS[kindSel.value]?.type;
@@ -602,6 +843,122 @@ function editItem(existing) {
   syncKind();
 
   $('#delItem')?.addEventListener('click', () => deleteItem(it.id));
+}
+
+/* --------------------------------------------------------------- import --- */
+
+function openImport() {
+  openSheet('Add from a confirmation', `
+    <p class="hint">Drop in a calendar invite, a wallet pass, a PDF or a screenshot, or just
+      paste the text of the email. Whatever it works out lands in the normal form for you
+      to check — nothing is saved until you say so.</p>
+
+    <label class="btn" id="pickWrap">
+      ${icon('inbox', { size: 18 })} Choose a file
+      <input type="file" id="importPick" hidden
+             accept=".ics,.pkpass,.pdf,image/*,text/plain,text/calendar,application/pdf">
+    </label>
+
+    <p class="sheet-section">Or paste the text</p>
+    <label class="field">
+      <span>Confirmation email, booking page, anything</span>
+      <textarea id="pasteBox" rows="7" placeholder="Paste here…"></textarea>
+    </label>
+    <button type="button" class="btn primary" id="parsePaste">Read it</button>
+
+    <p class="hint" id="importStatus"></p>
+    <p class="hint">A photo of a ticket works, but reading pictures is the least reliable
+      route and usually needs correcting. On an iPhone it is better to long-press the photo,
+      select the text yourself and paste it above.</p>
+  `, null);
+
+  const status = msg => { $('#importStatus').textContent = msg || ''; };
+
+  $('#importPick').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      status('Reading…');
+      const fields = await importFileToFields(file, status);
+      status('');
+      offerImported(fields);
+    } catch (err) {
+      status(err.message || 'That file could not be read.');
+    }
+  });
+
+  $('#parsePaste').addEventListener('click', () => {
+    const text = $('#pasteBox').value;
+    const fields = parseBooking(text, { yearHint: parseLocal(trip()?.start)?.getFullYear() });
+    if (!fields) { status('Nothing to read in that.'); return; }
+    offerImported({ ...fields, source: 'pasted text' });
+  });
+}
+
+// Everything an importer produces is a guess. Open the normal editor with the
+// guesses filled in, and say plainly how much to trust them.
+function offerImported(fields) {
+  const it = applyKind(blankItem(state.tripId), fields.kind || 'other');
+  Object.assign(it, {
+    title: fields.title || '',
+    from: fields.from || '',
+    to: fields.to || '',
+    seat: fields.seat || '',
+    ref: fields.ref || '',
+    provider: fields.provider || '',
+    notes: fields.notes || '',
+    amount: fields.amount || '',
+    currency: fields.currency || 'GBP',
+    start: joinWhen(fields.startDate, fields.startTime),
+    end: joinWhen(fields.endDate, fields.endTime),
+  });
+
+  closeSheet();
+  editItem(it, { isNew: true });
+
+  const conf = fields.confidence || 'low';
+  const line = conf === 'high'
+    ? `Read from the ${fields.source || 'file'}. Worth a glance.`
+    : `Best guess from the ${fields.source || 'text'} — check every field.`;
+  const banner = document.createElement('p');
+  banner.className = `import-banner ${conf}`;
+  banner.textContent = line;
+  $('#sheetBody').prepend(banner);
+}
+
+/* ---------------------------------------------------------------- rates --- */
+
+// One number per currency, typed once. No network means no live rates, and a
+// rate you set knowingly beats one the app invented.
+function editRates() {
+  const used = [...new Set(state.items.map(i => (i.currency || '').toUpperCase())
+    .filter(c => c && c !== 'GBP'))];
+  const known = Object.keys(state.rates || {});
+  const all = [...new Set([...used, ...known])];
+
+  openSheet('Exchange rates', `
+    <p class="hint">How many of each currency you get for one pound. Roughly right is
+      fine — this is for totting up a trip, not for accounting.</p>
+    ${all.length
+      ? all.map(c => field(`1 GBP buys this many ${c}`, `rate_${c}`, state.rates?.[c] ?? '', {
+          type: 'number', attrs: 'step="0.0001" min="0" inputmode="decimal"',
+        })).join('')
+      : '<p class="hint">Nothing on this trip is priced in another currency yet.</p>'}
+  `, async () => {
+    const f = new FormData(formEl());
+    const next = {};
+    for (const [k, v] of f.entries()) {
+      if (!k.startsWith('rate_')) continue;
+      const n = Number(v);
+      if (n > 0) next[k.slice(5)] = n;
+    }
+    await db.metaSet('rates', next);
+    closeSheet();
+    await load();
+    render();
+    toast('Rates saved');
+  });
 }
 
 /* ------------------------------------------------------------- settings --- */
@@ -622,6 +979,19 @@ function openSettings() {
         </div>`).join('')}
     </div>
     <button type="button" class="btn" id="newTrip">Start another trip</button>
+
+    <p class="sheet-section">Add from a confirmation</p>
+    <div class="panel">
+      <p class="hint">Calendar invite, wallet pass, PDF, screenshot, or pasted email text.
+        Whatever it can work out gets filled in for you to check.</p>
+      <button type="button" class="btn" id="importBookingBtn">${icon('inbox', { size: 18 })} Read a booking</button>
+    </div>
+
+    <p class="sheet-section">Money</p>
+    <div class="panel">
+      <p class="hint">Exchange rates, so a trip in three currencies still adds up to one number.</p>
+      <button type="button" class="btn" id="ratesBtn">Exchange rates</button>
+    </div>
 
     <p class="sheet-section">Reminders</p>
     <div class="panel">
@@ -673,6 +1043,8 @@ function openSettings() {
   body.querySelectorAll('[data-edit-trip]').forEach(el => el.addEventListener('click', () =>
     editTrip(state.trips.find(x => x.id === el.dataset.editTrip))));
   $('#newTrip').addEventListener('click', () => editTrip(null));
+  $('#importBookingBtn').addEventListener('click', openImport);
+  $('#ratesBtn').addEventListener('click', editRates);
   $('#icsBtn').addEventListener('click', () => exportIcs(false));
   $('#icsTravelBtn').addEventListener('click', () => exportIcs(true));
   $('#exportBtn').addEventListener('click', exportAll);
@@ -806,6 +1178,53 @@ function wire() {
     const it = state.items.find(x => x.id === el.dataset.open);
     if (it) editItem(it);
   }));
+
+  view.querySelectorAll('[data-dismiss]').forEach(el => el.addEventListener('click', ev => {
+    ev.stopPropagation();
+    dismissGap(el.dataset.dismiss);
+  }));
+
+  // Tapping a gap opens a new item already dated for the day with the hole in it.
+  view.querySelectorAll('[data-fix]').forEach(el => el.addEventListener('click', () => {
+    const seed = blankItem(state.tripId);
+    seed.start = el.dataset.fix;
+    if (el.dataset.kind === 'bed') { seed.type = 'stay'; seed.mode = 'stay'; }
+    editItem(seed, { isNew: true });
+  }));
+
+  view.querySelectorAll('[data-pay]').forEach(el => el.addEventListener('click', async ev => {
+    ev.stopPropagation();
+    const it = state.items.find(x => x.id === el.dataset.pay);
+    it.settledAt = Date.now();
+    await saveItem(it);
+    toast('Marked paid');
+  }));
+
+  wireSwipe();
+}
+
+// A short drag left on a row reveals its action. Kept deliberately crude: no
+// momentum, no animation frames, just enough to beat opening the editor.
+function wireSwipe() {
+  view.querySelectorAll('.stop-wrap').forEach(wrap => {
+    if (!wrap.querySelector('.swipe-act')) return;
+    const row = wrap.querySelector('.stop');
+    let x0 = null, open = false;
+
+    row.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; }, { passive: true });
+    row.addEventListener('touchmove', e => {
+      if (x0 === null) return;
+      const dx = e.touches[0].clientX - x0;
+      if (dx < -12) { wrap.classList.add('swiped'); open = true; }
+      if (dx > 12) { wrap.classList.remove('swiped'); open = false; }
+    }, { passive: true });
+    row.addEventListener('touchend', () => { x0 = null; }, { passive: true });
+
+    // A tap anywhere else puts it back.
+    row.addEventListener('click', e => {
+      if (open) { e.preventDefault(); e.stopPropagation(); wrap.classList.remove('swiped'); open = false; }
+    }, true);
+  });
 }
 
 function paintChrome() {

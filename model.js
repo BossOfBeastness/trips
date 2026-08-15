@@ -176,6 +176,44 @@ export function cashPlan(items) {
   });
 }
 
+// Rates are entered by hand as "1 GBP = n", because an offline app cannot fetch
+// them and a made-up rate is worse than an honest one you set yourself.
+export function toBase(amount, currency, rates = {}, base = 'GBP') {
+  const n = Number(amount) || 0;
+  const cur = (currency || base).toUpperCase();
+  if (cur === base) return n;
+  const rate = Number(rates[cur]);
+  return rate > 0 ? n / rate : null;   // null means "no rate set", never zero
+}
+
+export function tripTotals(items, rates = {}, base = 'GBP') {
+  let paid = 0, owed = 0;
+  const unconverted = new Map();
+
+  for (const it of items) {
+    if (!it.amount) continue;
+    const converted = toBase(it.amount, it.currency, rates, base);
+    const isOwed = PAY_STATUS[it.payStatus]?.needsMoney && !it.settledAt;
+
+    if (converted === null) {
+      const cur = (it.currency || '?').toUpperCase();
+      const bucket = unconverted.get(cur) || { currency: cur, total: 0 };
+      bucket.total += Number(it.amount) || 0;
+      unconverted.set(cur, bucket);
+      continue;
+    }
+    if (isOwed) owed += converted; else paid += converted;
+  }
+
+  return {
+    base,
+    paid,
+    owed,
+    total: paid + owed,
+    unconverted: [...unconverted.values()],
+  };
+}
+
 export function fmtMoney(amount, currency) {
   const n = Number(amount) || 0;
   const cur = (currency || '').toUpperCase();

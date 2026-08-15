@@ -24,9 +24,6 @@
   --display: ui-serif, "New York", Iowan Old Style, Georgia, serif;
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, Segoe UI, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  /* Ships with iOS. Used only where you would have scribbled in a margin:
-     costs, and how many days you are sitting still. */
-  --hand: "Bradley Hand", "Marker Felt", "Segoe Print", "Comic Sans MS", cursive;
 
   --r: 14px;
   --tab-h: 52px;
@@ -344,8 +341,9 @@ main {
   left: 0;
   top: 50%;
   transform: translateY(-50%);
-  font-family: var(--hand);
-  font-size: 14px;
+  font-size: 11px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
   color: var(--ink-3);
 }
 
@@ -432,20 +430,212 @@ main {
   white-space: nowrap;
 }
 .cost {
-  display: flex;
-  align-items: center;
-  gap: 5px;
   flex: none;
   align-self: center;
+  text-align: right;
+  white-space: nowrap;
+}
+.cost-amt {
+  display: block;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   color: var(--ink-2);
-  white-space: nowrap;
 }
-/* Owed in cash is the one you can still get caught out by, so it carries the
-   wallet and the warm colour. Anything already paid just states its price. */
-.cost.owed { color: var(--fruit); }
-.stop.done .cost { color: var(--ink-3); }
+/* Owed in cash is the one that can still catch you out, so it is the only warm
+   thing in the row — colour and a word, not colour and an icon and a word. */
+.cost-amt.owed { color: var(--fruit); }
+.cost-tag {
+  display: block;
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--fruit);
+}
+.stop.done .cost-amt, .stop.done .cost-tag { color: var(--ink-3); }
+
+/* Departure over arrival, joined by a hairline. */
+.stop-time { width: 52px; }
+.dep { display: block; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.conn {
+  display: block;
+  width: 1px; height: 9px;
+  margin: 1px 0 1px 1px;
+  background: var(--line);
+  position: relative;
+}
+.conn::after {
+  content: '';
+  position: absolute;
+  bottom: -1px; left: -2px;
+  width: 5px; height: 5px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  transform: rotate(45deg);
+}
+.arr { display: block; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+/* Without this a flight landing 11:00 tomorrow reads as arriving an hour early. */
+.plus { font-size: 9px; vertical-align: super; color: var(--fruit); margin-left: 1px; }
+
+/* -------------------------------------------------------------- swipe --- */
+
+/* No overflow clipping here: the spine node sits at a negative offset and would
+   be cut off. The row's own background hides the action until it slides. */
+.stop-wrap { position: relative; }
+.stop-wrap .stop { transition: transform 160ms ease; background: var(--paper); position: relative; z-index: 1; }
+.stop-wrap.swiped .stop { transform: translateX(-96px); }
+.swipe-act {
+  position: absolute;
+  right: 0; top: 0; bottom: 0;
+  width: 96px;
+  border: 0;
+  background: var(--moss);
+  color: var(--paper);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------- ribbon --- */
+
+.ribbon { display: flex; gap: 3px; margin-bottom: 8px; }
+.rday { flex: 1; min-width: 0; text-align: center; }
+.rnum { font-size: 9px; color: var(--ink-3); margin-bottom: 3px; }
+.rbar { height: 5px; border-radius: 3px; background: var(--line-2); margin-bottom: 2px; }
+.rbar.move { background: var(--frond); }
+.rbar.bed { background: var(--moss); }
+.rbar.none { background: transparent; }
+.rbar.miss { background: transparent; border: 1px dashed var(--fruit); }
+.ribbon-key { font-size: 11px; color: var(--ink-3); margin: 0 0 22px; }
+.miss-key { color: var(--fruit); }
+
+/* --------------------------------------------------------------- gaps --- */
+
+.hole { position: relative; display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.hole-node {
+  position: absolute;
+  left: -43.5px; top: 50%;
+  transform: translateY(-50%);
+  width: 27px; height: 27px;
+  border-radius: 50%;
+  border: 1px dashed var(--fruit);
+  background: var(--paper);
+  color: var(--fruit);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+}
+.hole-body {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px dashed var(--fruit);
+  border-radius: 10px;
+  background: none;
+  color: var(--fruit);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.hole-body b { font-weight: 600; }
+.gap-why { display: block; color: var(--ink-3); }
+.hole-skip { flex: none; background: none; border: 0; color: var(--ink-3); font-size: 12px; padding: 6px; }
+
+.note-count {
+  flex: none;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--fruit);
+  color: var(--paper);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------- totals --- */
+
+.totals { margin-bottom: 26px; }
+.totals-sum {
+  font-family: var(--display);
+  font-size: 40px;
+  letter-spacing: -.03em;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.totals-split { margin: 8px 0 0; font-size: 13px; color: var(--ink-2); }
+.totals-split .owed { color: var(--fruit); }
+.totals-missing { margin: 6px 0 0; font-size: 12px; color: var(--ink-3); }
+.linkish { background: none; border: 0; padding: 0; color: var(--moss); text-decoration: underline; font-size: 12px; }
+
+/* --------------------------------------------------------- when picker --- */
+
+.when { margin-bottom: 6px; }
+.daystrip {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 2px 0 8px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+.dayb {
+  flex: 0 0 auto;
+  width: 52px;
+  padding: 8px 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--card);
+  color: var(--ink);
+  text-align: center;
+  scroll-snap-align: center;
+}
+.dayb .dow { display: block; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.dayb .num { display: block; font-family: var(--display); font-size: 20px; line-height: 1.2; }
+.dayb .mon { display: block; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+.dayb.busy::after {
+  content: '';
+  display: block;
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: var(--pale);
+  margin: 4px auto 0;
+}
+.dayb.on { background: var(--moss); border-color: var(--moss); color: var(--paper); }
+.dayb.on .dow, .dayb.on .mon { color: color-mix(in srgb, var(--paper) 72%, var(--moss)); }
+.dayb.on.busy::after { background: var(--paper); }
+
+.chiprow { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 8px; }
+.chip {
+  padding: 9px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.chip.ghost { color: var(--ink-2); border-style: dashed; }
+.chip.on { background: var(--moss); border-color: var(--moss); color: var(--paper); }
+.chip.wide { width: 100%; }
+.loose {
+  width: 100%;
+  padding: 11px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  -webkit-appearance: none;
+}
+
+.import-banner {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  background: var(--paper-2);
+  color: var(--ink-2);
+}
+.import-banner.low { border: 1px dashed var(--fruit); color: var(--fruit); }
 
 .focus-arrive { margin: 5px 0 0; font-size: 14px; color: var(--ink-2); }
 .focus-docs {
